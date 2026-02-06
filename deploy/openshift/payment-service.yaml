@@ -5,7 +5,11 @@ metadata:
 data:
   PAYMENT_DB_URL: jdbc:postgresql://pgtest.platform.svc.cluster.local:5432/testdb
   PAYMENT_DB_USER: testuser
-  KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+  KAFKA_BOOTSTRAP_SERVERS: platform-kafka-kafka-bootstrap.platform.svc.cluster.local:9093
+  KAFKA_SECURITY_PROTOCOL: SASL_SSL
+  KAFKA_SASL_MECHANISM: SCRAM-SHA-512
+  KAFKA_SSL_TRUSTSTORE_LOCATION: /etc/kafka/truststore.jks
+  KAFKA_SSL_TRUSTSTORE_TYPE: JKS
   KEYCLOAK_ISSUER_URI: https://keycloak-platform.apps-crc.testing/realms/master
   PAYMENT_EVENTS_ENABLED: "true"
   PAYMENT_EVENTS_TOPIC: payment.events
@@ -47,6 +51,13 @@ spec:
           env:
             - name: JAVA_TOOL_OPTIONS
               value: "-Djavax.net.ssl.trustStore=/etc/ssl/openshift/truststore.jks -Djavax.net.ssl.trustStorePassword=changeit"
+            - name: KAFKA_USERNAME
+              value: platform-services
+            - name: KAFKA_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: platform-services
+                  key: password
           readinessProbe:
             httpGet:
               path: /actuator/health
@@ -68,6 +79,9 @@ spec:
             - name: truststore
               mountPath: /etc/ssl/openshift
               readOnly: true
+            - name: kafka-truststore
+              mountPath: /etc/kafka
+              readOnly: true
             - name: service-tls
               mountPath: /etc/tls
               readOnly: true
@@ -75,6 +89,9 @@ spec:
         - name: truststore
           secret:
             secretName: platform-truststore
+        - name: kafka-truststore
+          secret:
+            secretName: kafka-truststore
         - name: service-tls
           secret:
             secretName: payment-service-tls
