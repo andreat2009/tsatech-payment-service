@@ -1,0 +1,42 @@
+server:
+  port: ${SERVER_PORT:8087}
+  ssl:
+    enabled: ${SERVER_SSL_ENABLED:false}
+    certificate: ${SERVER_SSL_CERT:/etc/tls/tls.crt}
+    certificate-private-key: ${SERVER_SSL_KEY:/etc/tls/tls.key}
+
+spring:
+  application:
+    name: payment-service
+  datasource:
+    url: ${PAYMENT_DB_URL:jdbc:postgresql://localhost:5432/payment}
+    username: ${PAYMENT_DB_USER:payment}
+    password: ${PAYMENT_DB_PASSWORD:payment}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${KEYCLOAK_ISSUER_URI:https://keycloak-platform.apps-crc.testing/realms/master}
+
+payment:
+  events:
+    enabled: ${PAYMENT_EVENTS_ENABLED:true}
+    topic: ${PAYMENT_EVENTS_TOPIC:payment.events}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
