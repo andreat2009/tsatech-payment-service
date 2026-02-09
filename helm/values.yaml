@@ -24,7 +24,7 @@ env:
   KAFKA_SECURITY_PROTOCOL: "PLAINTEXT"
 
 secret:
-  name: "payment-serviceSecret"
+  name: "payment-service-secret"
   create: false
   data: {}
   # data example:
