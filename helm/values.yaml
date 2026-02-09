@@ -12,7 +12,7 @@ route:
   enabled: true
   host: "payment-service-ecommerce.apps-crc.testing"
   tls:
-    termination: reencrypt
+    termination: passthrough
     insecureEdgeTerminationPolicy: Redirect
   annotations: {}
 
@@ -20,6 +20,8 @@ env:
   SERVER_PORT: "8443"
   SERVER_SSL_ENABLED: "true"
   KEYCLOAK_ISSUER_URI: "https://keycloak-platform.apps-crc.testing/realms/master"
+  KAFKA_BOOTSTRAP_SERVERS: "kafka.platform.svc.cluster.local:9092"
+  KAFKA_SECURITY_PROTOCOL: "PLAINTEXT"
 
 secret:
   name: "payment-serviceSecret"
@@ -32,9 +34,12 @@ secret:
   #   DB_USER: "payment-service"
   #   DB_PASSWORD: "change-me"
 
+secretEnv:
+  {}
+
 tls:
   enabled: true
-  secretName: "payment-service-tls"
+  secretName: "wildcard-apps-tls"
 
 truststore:
   enabled: false
