@@ -1,8 +1,8 @@
-replicaCount: 2
-
+replicaCount: 1
 image:
   repository: image-registry.openshift-image-registry.svc:5000/ecommerce/payment-service
   tag: "latest"
+  digest: ""
   pullPolicy: IfNotPresent
 
 service:
@@ -42,7 +42,7 @@ tls:
   secretName: "wildcard-apps-tls"
 
 truststore:
-  enabled: false
+  enabled: true
   secretName: "platform-truststore"
   mountPath: "/etc/ssl/openshift"
   password: "changeit"
