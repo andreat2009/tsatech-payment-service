@@ -22,6 +22,7 @@ env:
   KEYCLOAK_ISSUER_URI: "https://keycloak-platform.apps-crc.testing/realms/master"
   KAFKA_BOOTSTRAP_SERVERS: "kafka.platform.svc.cluster.local:9092"
   KAFKA_SECURITY_PROTOCOL: "PLAINTEXT"
+  PAYMENT_ORDER_EVENTS_TOPIC: "order.events"
 
 secret:
   name: "payment-service-secret"

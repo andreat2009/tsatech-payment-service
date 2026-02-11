@@ -6,6 +6,7 @@ import com.newproject.payment.dto.PaymentResponse;
 import com.newproject.payment.events.EventPublisher;
 import com.newproject.payment.exception.NotFoundException;
 import com.newproject.payment.repository.PaymentRepository;
+import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -48,6 +49,35 @@ public class PaymentService {
 
         Payment saved = paymentRepository.save(payment);
         eventPublisher.publish("PAYMENT_UPDATED", "payment", saved.getId().toString(), toResponse(saved));
+        return toResponse(saved);
+    }
+
+    @Transactional
+    public PaymentResponse upsertFromOrderEvent(Long orderId, BigDecimal amount, String currency) {
+        Payment payment = paymentRepository.findFirstByOrderIdOrderByIdAsc(orderId)
+            .orElseGet(Payment::new);
+
+        boolean created = payment.getId() == null;
+        OffsetDateTime now = OffsetDateTime.now();
+
+        payment.setOrderId(orderId);
+        payment.setAmount(amount);
+        payment.setCurrency(currency);
+        if (payment.getProvider() == null || payment.getProvider().isBlank()) {
+            payment.setProvider("AUTO-KAFKA");
+        }
+
+        if (created) {
+            payment.setCreatedAt(now);
+            if (payment.getStatus() == null) {
+                payment.setStatus("CREATED");
+            }
+        }
+
+        payment.setUpdatedAt(now);
+
+        Payment saved = paymentRepository.save(payment);
+        eventPublisher.publish(created ? "PAYMENT_CREATED" : "PAYMENT_UPDATED", "payment", saved.getId().toString(), toResponse(saved));
         return toResponse(saved);
     }
 
