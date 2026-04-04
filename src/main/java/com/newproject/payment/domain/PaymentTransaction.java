@@ -45,8 +45,7 @@ public class PaymentTransaction {
     @Column(name = "failure_reason", length = 1000)
     private String failureReason;
 
-    @Lob
-    @Column(name = "raw_payload")
+    @Column(name = "raw_payload", columnDefinition = "TEXT")
     private String rawPayload;
 
     @Column(name = "created_at", nullable = false)
