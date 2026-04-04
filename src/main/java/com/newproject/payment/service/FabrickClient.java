@@ -18,34 +18,29 @@ import org.springframework.stereotype.Component;
 
 @Component
 public class FabrickClient {
-    private final PaymentProviderProperties properties;
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient;
 
-    public FabrickClient(PaymentProviderProperties properties, ObjectMapper objectMapper) {
-        this.properties = properties;
+    public FabrickClient(ObjectMapper objectMapper) {
         this.objectMapper = objectMapper;
         this.httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).build();
     }
 
-    public boolean isAvailable() {
-        return properties.getFabrick().isEnabled()
-            && notBlank(properties.getFabrick().getApiKey())
-            && notBlank(properties.getFabrick().getShopLogin())
-            && notBlank(properties.getFabrick().getBaseUrl());
+    public boolean isAvailable(PaymentMethodProviderConfigurationResolver.ResolvedFabrickConfig config) {
+        return config != null && config.isAvailable();
     }
 
-    public FabrickCreateResult createHostedPayment(Payment payment) {
-        if (!isAvailable()) {
-            throw new BadRequestException("Fabrick sandbox/production credentials are not configured");
+    public FabrickCreateResult createHostedPayment(PaymentMethodProviderConfigurationResolver.ResolvedFabrickConfig config, Payment payment) {
+        if (!isAvailable(config)) {
+            throw new BadRequestException("Fabrick credentials are not configured");
         }
         try {
             Map<String, Object> body = new LinkedHashMap<>();
-            body.put("shopLogin", properties.getFabrick().getShopLogin());
+            body.put("shopLogin", config.shopLogin());
             body.put("amount", formatAmount(payment.getAmount()));
             body.put("currency", payment.getCurrency());
             body.put("shopTransactionID", buildShopTransactionId(payment));
-            if (notBlank(payment.getReturnUrl()) || notBlank(payment.getCancelUrl()) || notBlank(properties.getFabrick().getNotificationUrl())) {
+            if (notBlank(payment.getReturnUrl()) || notBlank(payment.getCancelUrl()) || notBlank(config.notificationUrl())) {
                 Map<String, Object> responseUrls = new LinkedHashMap<>();
                 if (notBlank(payment.getReturnUrl())) {
                     responseUrls.put("buyerOK", payment.getReturnUrl());
@@ -53,11 +48,11 @@ public class FabrickClient {
                 if (notBlank(payment.getCancelUrl())) {
                     responseUrls.put("buyerKO", payment.getCancelUrl());
                 }
-                if (notBlank(properties.getFabrick().getNotificationUrl())) {
+                if (notBlank(config.notificationUrl())) {
                     responseUrls.put(
                         "serverNotificationURL",
                         appendQueryParam(
-                            appendQueryParam(properties.getFabrick().getNotificationUrl(), "paymentId", String.valueOf(payment.getId())),
+                            appendQueryParam(config.notificationUrl(), "paymentId", String.valueOf(payment.getId())),
                             "orderId",
                             String.valueOf(payment.getOrderId())
                         )
@@ -68,9 +63,9 @@ public class FabrickClient {
                 body.put("responseURLs", responseUrls);
             }
 
-            HttpRequest request = HttpRequest.newBuilder(URI.create(trimTrailingSlash(properties.getFabrick().getBaseUrl()) + "/api/v1/payment/create/"))
+            HttpRequest request = HttpRequest.newBuilder(URI.create(trimTrailingSlash(config.baseUrl()) + "/api/v1/payment/create/"))
                 .timeout(Duration.ofSeconds(20))
-                .header("Authorization", "apikey " + properties.getFabrick().getApiKey())
+                .header("Authorization", "apikey " + config.apiKey())
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)))
                 .build();
@@ -93,8 +88,8 @@ public class FabrickClient {
                 paymentId,
                 paymentToken,
                 redirectUrl,
-                properties.getFabrick().getLightboxScriptUrl(),
-                properties.getFabrick().getShopLogin()
+                config.lightboxScriptUrl(),
+                config.shopLogin()
             );
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
@@ -104,16 +99,16 @@ public class FabrickClient {
         }
     }
 
-    public FabrickPaymentDetail fetchPaymentDetail(String providerPaymentId, String paymentToken, String shopTransactionId) {
-        if (!isAvailable()) {
-            throw new BadRequestException("Fabrick sandbox/production credentials are not configured");
+    public FabrickPaymentDetail fetchPaymentDetail(PaymentMethodProviderConfigurationResolver.ResolvedFabrickConfig config, String providerPaymentId, String paymentToken, String shopTransactionId) {
+        if (!isAvailable(config)) {
+            throw new BadRequestException("Fabrick credentials are not configured");
         }
         if (!notBlank(providerPaymentId) && !notBlank(shopTransactionId)) {
             throw new BadRequestException("Fabrick payment detail requires paymentID or shopTransactionID");
         }
         try {
             Map<String, Object> body = new LinkedHashMap<>();
-            body.put("shopLogin", properties.getFabrick().getShopLogin());
+            body.put("shopLogin", config.shopLogin());
             if (notBlank(providerPaymentId)) {
                 body.put("paymentID", providerPaymentId);
             }
@@ -121,9 +116,9 @@ public class FabrickClient {
                 body.put("shopTransactionID", shopTransactionId);
             }
 
-            HttpRequest.Builder requestBuilder = HttpRequest.newBuilder(URI.create(trimTrailingSlash(properties.getFabrick().getBaseUrl()) + "/api/v1/payment/detail"))
+            HttpRequest.Builder requestBuilder = HttpRequest.newBuilder(URI.create(trimTrailingSlash(config.baseUrl()) + "/api/v1/payment/detail"))
                 .timeout(Duration.ofSeconds(20))
-                .header("Authorization", "apikey " + properties.getFabrick().getApiKey())
+                .header("Authorization", "apikey " + config.apiKey())
                 .header("Content-Type", "application/json");
             if (notBlank(paymentToken)) {
                 requestBuilder.header("paymentToken", paymentToken);

@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.newproject.payment.domain.Payment;
 import com.newproject.payment.domain.PaymentMethod;
 import com.newproject.payment.domain.PaymentTransaction;
+import com.newproject.payment.dto.AdminPaymentMethodResponse;
 import com.newproject.payment.dto.FabrickCompletionRequest;
 import com.newproject.payment.dto.PaymentMethodRequest;
 import com.newproject.payment.dto.PaymentMethodResponse;
@@ -36,7 +37,8 @@ public class PaymentService {
     private final EventPublisher eventPublisher;
     private final PayPalClient payPalClient;
     private final FabrickClient fabrickClient;
-    private final PaymentProviderProperties providerProperties;
+    private final PaymentMethodProviderConfigurationResolver providerConfigurationResolver;
+    private final PaymentCredentialCryptoService paymentCredentialCryptoService;
     private final ObjectMapper objectMapper;
 
     public PaymentService(
@@ -46,7 +48,8 @@ public class PaymentService {
         EventPublisher eventPublisher,
         PayPalClient payPalClient,
         FabrickClient fabrickClient,
-        PaymentProviderProperties providerProperties,
+        PaymentMethodProviderConfigurationResolver providerConfigurationResolver,
+        PaymentCredentialCryptoService paymentCredentialCryptoService,
         ObjectMapper objectMapper
     ) {
         this.paymentRepository = paymentRepository;
@@ -55,7 +58,8 @@ public class PaymentService {
         this.eventPublisher = eventPublisher;
         this.payPalClient = payPalClient;
         this.fabrickClient = fabrickClient;
-        this.providerProperties = providerProperties;
+        this.providerConfigurationResolver = providerConfigurationResolver;
+        this.paymentCredentialCryptoService = paymentCredentialCryptoService;
         this.objectMapper = objectMapper;
     }
 
@@ -68,29 +72,29 @@ public class PaymentService {
     }
 
     @Transactional(readOnly = true)
-    public List<PaymentMethodResponse> listAdminMethods() {
+    public List<AdminPaymentMethodResponse> listAdminMethods() {
         return paymentMethodRepository.findAllByOrderBySortOrderAscCodeAsc().stream()
-            .map(this::toMethodResponse)
+            .map(this::toAdminMethodResponse)
             .toList();
     }
 
     @Transactional(readOnly = true)
-    public PaymentMethodResponse getAdminMethod(Long id) {
-        return toMethodResponse(findMethodById(id));
+    public AdminPaymentMethodResponse getAdminMethod(Long id) {
+        return toAdminMethodResponse(findMethodById(id));
     }
 
     @Transactional
-    public PaymentMethodResponse createAdminMethod(PaymentMethodRequest request) {
+    public AdminPaymentMethodResponse createAdminMethod(PaymentMethodRequest request) {
         PaymentMethod method = new PaymentMethod();
         applyMethodRequest(method, request);
-        return toMethodResponse(paymentMethodRepository.save(method));
+        return toAdminMethodResponse(paymentMethodRepository.save(method));
     }
 
     @Transactional
-    public PaymentMethodResponse updateAdminMethod(Long id, PaymentMethodRequest request) {
+    public AdminPaymentMethodResponse updateAdminMethod(Long id, PaymentMethodRequest request) {
         PaymentMethod method = findMethodById(id);
         applyMethodRequest(method, request);
-        return toMethodResponse(paymentMethodRepository.save(method));
+        return toAdminMethodResponse(paymentMethodRepository.save(method));
     }
 
     @Transactional
@@ -153,7 +157,8 @@ public class PaymentService {
         Payment payment = findPayment(id);
         ensureProvider(payment, "PAYPAL");
 
-        PayPalClient.PayPalCaptureResult capture = payPalClient.captureOrder(payment, token);
+        PaymentMethod method = resolveMethodForPayment(payment);
+        PayPalClient.PayPalCaptureResult capture = payPalClient.captureOrder(resolvePayPalConfig(method), payment, token);
         return persistPayPalState(
             payment,
             capture.orderId(),
@@ -176,7 +181,8 @@ public class PaymentService {
 
         String providerPaymentId = firstNonBlank(trimToNull(request.getProviderPaymentId()), payment.getProviderPaymentId());
         String paymentToken = firstNonBlank(trimToNull(request.getPaymentToken()), payment.getLightboxPaymentToken());
-        FabrickClient.FabrickPaymentDetail detail = fabrickClient.fetchPaymentDetail(providerPaymentId, paymentToken, buildShopTransactionId(payment));
+        PaymentMethod method = resolveMethodForPayment(payment);
+        FabrickClient.FabrickPaymentDetail detail = fabrickClient.fetchPaymentDetail(resolveFabrickConfig(method), providerPaymentId, paymentToken, buildShopTransactionId(payment));
         if (trimToNull(request.getResponseUrl()) != null) {
             payment.setRedirectUrl(trimToNull(request.getResponseUrl()));
         }
@@ -201,14 +207,16 @@ public class PaymentService {
 
         if ("PAYPAL".equalsIgnoreCase(payment.getProvider())) {
             String captureId = firstNonBlank(payment.getProviderPaymentId(), fetchPayPalCaptureIdIfMissing(payment));
+            PaymentMethod method = resolveMethodForPayment(payment);
             PayPalClient.PayPalRefundResult refund = payPalClient.refundCapture(
+                resolvePayPalConfig(method),
                 captureId,
                 requestedAmount,
                 payment.getCurrency(),
                 reason,
                 "refund-payment-" + payment.getId() + "-" + System.currentTimeMillis()
             );
-            PayPalClient.PayPalOrderSnapshot snapshot = payPalClient.fetchOrderSnapshot(payment.getProviderOrderId());
+            PayPalClient.PayPalOrderSnapshot snapshot = payPalClient.fetchOrderSnapshot(resolvePayPalConfig(method), payment.getProviderOrderId());
             return persistPayPalSnapshot(
                 payment,
                 snapshot,
@@ -255,7 +263,8 @@ public class PaymentService {
     public PaymentResponse reconcile(Long id) {
         Payment payment = findPayment(id);
         if ("PAYPAL".equalsIgnoreCase(payment.getProvider())) {
-            PayPalClient.PayPalOrderSnapshot snapshot = payPalClient.fetchOrderSnapshot(payment.getProviderOrderId());
+            PaymentMethod method = resolveMethodForPayment(payment);
+            PayPalClient.PayPalOrderSnapshot snapshot = payPalClient.fetchOrderSnapshot(resolvePayPalConfig(method), payment.getProviderOrderId());
             return persistPayPalSnapshot(
                 payment,
                 snapshot,
@@ -269,7 +278,9 @@ public class PaymentService {
             );
         }
         if ("FABRICK".equalsIgnoreCase(payment.getProvider())) {
+            PaymentMethod method = resolveMethodForPayment(payment);
             FabrickClient.FabrickPaymentDetail detail = fabrickClient.fetchPaymentDetail(
+                resolveFabrickConfig(method),
                 payment.getProviderPaymentId(),
                 payment.getLightboxPaymentToken(),
                 buildShopTransactionId(payment)
@@ -355,7 +366,8 @@ public class PaymentService {
         String transmissionSig,
         String body
     ) {
-        if (!payPalClient.verifyWebhookSignature(transmissionId, transmissionTime, certUrl, authAlgo, transmissionSig, body)) {
+        PaymentMethod method = paymentMethodRepository.findByCode("paypal").orElseGet(() -> fallbackMethodForProvider("PAYPAL"));
+        if (!payPalClient.verifyWebhookSignature(resolvePayPalConfig(method), transmissionId, transmissionTime, certUrl, authAlgo, transmissionSig, body)) {
             throw new BadRequestException("Invalid PayPal webhook signature");
         }
 
@@ -369,7 +381,8 @@ public class PaymentService {
 
             PaymentResponse updated;
             if ("PAYMENT.CAPTURE.REFUNDED".equalsIgnoreCase(eventType) && trimToNull(payment.getProviderOrderId()) != null) {
-                PayPalClient.PayPalOrderSnapshot snapshot = payPalClient.fetchOrderSnapshot(payment.getProviderOrderId());
+                PaymentMethod paymentMethod = resolveMethodForPayment(payment);
+                PayPalClient.PayPalOrderSnapshot snapshot = payPalClient.fetchOrderSnapshot(resolvePayPalConfig(paymentMethod), payment.getProviderOrderId());
                 updated = persistPayPalSnapshot(
                     payment,
                     snapshot,
@@ -426,6 +439,7 @@ public class PaymentService {
         }
 
         FabrickClient.FabrickPaymentDetail detail = fabrickClient.fetchPaymentDetail(
+            resolveFabrickConfig(resolveMethodForPayment(payment)),
             firstNonBlank(normalized.get("providerPaymentId"), payment.getProviderPaymentId()),
             firstNonBlank(normalized.get("paymentToken"), payment.getLightboxPaymentToken()),
             firstNonBlank(normalized.get("shopTransactionId"), buildShopTransactionId(payment))
@@ -466,17 +480,17 @@ public class PaymentService {
 
     private void initiatePayment(Payment payment, PaymentRequest request, PaymentMethod method) {
         String provider = method.getProvider().toUpperCase(Locale.ROOT);
-        payment.setProviderEnvironment(resolveEnvironment(provider));
+        payment.setProviderEnvironment(resolveEnvironment(method));
         if ("OFFLINE".equals(provider)) {
             payment.setStatus(request.getStatus() != null ? request.getStatus() : "PENDING_OFFLINE");
             return;
         }
         if ("PAYPAL".equals(provider)) {
-            if (!payPalClient.isAvailable()) {
+            if (!payPalClient.isAvailable(resolvePayPalConfig(method))) {
                 throw new BadRequestException("PayPal is not available. Configure sandbox or production credentials first.");
             }
             PaymentRequest providerRequest = copyRequestWithUrls(request, payment);
-            PayPalClient.PayPalCreateResult result = payPalClient.createOrder(payment, providerRequest);
+            PayPalClient.PayPalCreateResult result = payPalClient.createOrder(resolvePayPalConfig(method), payment, providerRequest);
             payment.setProviderOrderId(result.orderId());
             payment.setProviderStatus(result.status());
             payment.setApprovalUrl(result.approvalUrl());
@@ -485,10 +499,10 @@ public class PaymentService {
             return;
         }
         if ("FABRICK".equals(provider)) {
-            if (!fabrickClient.isAvailable()) {
+            if (!fabrickClient.isAvailable(resolveFabrickConfig(method))) {
                 throw new BadRequestException("Fabrick is not available. Configure sandbox or production credentials first.");
             }
-            FabrickClient.FabrickCreateResult result = fabrickClient.createHostedPayment(payment);
+            FabrickClient.FabrickCreateResult result = fabrickClient.createHostedPayment(resolveFabrickConfig(method), payment);
             payment.setProviderPaymentId(result.paymentId());
             payment.setLightboxPaymentToken(result.paymentToken());
             payment.setLightboxScriptUrl(result.scriptUrl());
@@ -538,13 +552,48 @@ public class PaymentService {
     }
 
     private void applyMethodRequest(PaymentMethod method, PaymentMethodRequest request) {
+        String provider = requiredTrimmed(request.getProvider(), "provider").toUpperCase(Locale.ROOT);
         method.setCode(normalizeMethodCode(trimToNull(request.getCode()), null));
         method.setDisplayName(requiredTrimmed(request.getDisplayName(), "displayName"));
-        method.setProvider(requiredTrimmed(request.getProvider(), "provider").toUpperCase(Locale.ROOT));
+        method.setProvider(provider);
         method.setPaymentFlow(requiredTrimmed(request.getPaymentFlow(), "paymentFlow").toUpperCase(Locale.ROOT));
         method.setDescription(trimToNull(request.getDescription()));
         method.setActive(request.getActive() == null || request.getActive());
         method.setSortOrder(request.getSortOrder() == null ? 0 : request.getSortOrder());
+        method.setProviderEnvironment(trimToNull(request.getProviderEnvironment()));
+        method.setProviderBaseUrl(trimToNull(request.getProviderBaseUrl()));
+
+        if ("PAYPAL".equals(provider)) {
+            method.setProviderBrandName(trimToNull(request.getProviderBrandName()));
+            method.setProviderWebhookId(trimToNull(request.getProviderWebhookId()));
+            method.setProviderClientId(trimToNull(request.getProviderClientId()));
+            if (Boolean.TRUE.equals(request.getClearProviderClientSecret())) {
+                method.setProviderClientSecretEncrypted(null);
+            } else if (trimToNull(request.getProviderClientSecret()) != null) {
+                method.setProviderClientSecretEncrypted(paymentCredentialCryptoService.encrypt(trimToNull(request.getProviderClientSecret())));
+            }
+        } else {
+            method.setProviderBrandName(null);
+            method.setProviderWebhookId(null);
+            method.setProviderClientId(null);
+            method.setProviderClientSecretEncrypted(null);
+        }
+
+        if ("FABRICK".equals(provider)) {
+            method.setProviderShopLogin(trimToNull(request.getProviderShopLogin()));
+            method.setProviderLightboxScriptUrl(trimToNull(request.getProviderLightboxScriptUrl()));
+            method.setProviderNotificationUrl(trimToNull(request.getProviderNotificationUrl()));
+            if (Boolean.TRUE.equals(request.getClearProviderApiKey())) {
+                method.setProviderApiKeyEncrypted(null);
+            } else if (trimToNull(request.getProviderApiKey()) != null) {
+                method.setProviderApiKeyEncrypted(paymentCredentialCryptoService.encrypt(trimToNull(request.getProviderApiKey())));
+            }
+        } else {
+            method.setProviderShopLogin(null);
+            method.setProviderApiKeyEncrypted(null);
+            method.setProviderLightboxScriptUrl(null);
+            method.setProviderNotificationUrl(null);
+        }
     }
 
     private PaymentMethod resolveMethod(String methodCode) {
@@ -566,16 +615,17 @@ public class PaymentService {
     private boolean isMethodAvailable(PaymentMethod method) {
         return switch (method.getProvider().toUpperCase(Locale.ROOT)) {
             case "OFFLINE" -> true;
-            case "PAYPAL" -> payPalClient.isAvailable();
-            case "FABRICK" -> fabrickClient.isAvailable();
+            case "PAYPAL" -> payPalClient.isAvailable(resolvePayPalConfig(method));
+            case "FABRICK" -> fabrickClient.isAvailable(resolveFabrickConfig(method));
             default -> false;
         };
     }
 
-    private String resolveEnvironment(String provider) {
+    private String resolveEnvironment(PaymentMethod method) {
+        String provider = method.getProvider().toUpperCase(Locale.ROOT);
         return switch (provider) {
-            case "PAYPAL" -> providerProperties.getPaypal().getEnvironment();
-            case "FABRICK" -> providerProperties.getFabrick().getEnvironment();
+            case "PAYPAL" -> firstNonBlank(resolvePayPalConfig(method).environment(), "production");
+            case "FABRICK" -> firstNonBlank(resolveFabrickConfig(method).environment(), "production");
             default -> "internal";
         };
     }
@@ -780,7 +830,7 @@ public class PaymentService {
         if (trimToNull(payment.getProviderOrderId()) == null) {
             throw new BadRequestException("PayPal capture id is missing and the payment has no provider order id to reconcile");
         }
-        PayPalClient.PayPalOrderSnapshot snapshot = payPalClient.fetchOrderSnapshot(payment.getProviderOrderId());
+        PayPalClient.PayPalOrderSnapshot snapshot = payPalClient.fetchOrderSnapshot(resolvePayPalConfig(resolveMethodForPayment(payment)), payment.getProviderOrderId());
         payment.setProviderOrderId(firstNonBlank(snapshot.orderId(), payment.getProviderOrderId()));
         payment.setProviderPaymentId(firstNonBlank(snapshot.captureId(), payment.getProviderPaymentId()));
         if (trimToNull(payment.getProviderPaymentId()) == null) {
@@ -906,6 +956,43 @@ public class PaymentService {
         eventPublisher.publish(eventType, "payment", payment.getId().toString(), toResponse(payment));
     }
 
+    private AdminPaymentMethodResponse toAdminMethodResponse(PaymentMethod method) {
+        AdminPaymentMethodResponse response = new AdminPaymentMethodResponse();
+        response.setId(method.getId());
+        response.setCode(method.getCode());
+        response.setDisplayName(method.getDisplayName());
+        response.setProvider(method.getProvider());
+        response.setPaymentFlow(method.getPaymentFlow());
+        response.setDescription(method.getDescription());
+        response.setActive(method.getActive());
+        response.setSortOrder(method.getSortOrder());
+        response.setProviderConfigurationAvailable(true);
+
+        String provider = method.getProvider() == null ? "" : method.getProvider().toUpperCase(Locale.ROOT);
+        if ("PAYPAL".equals(provider)) {
+            PaymentMethodProviderConfigurationResolver.ResolvedPayPalConfig config = resolvePayPalConfig(method);
+            response.setProviderEnvironment(config.environment());
+            response.setProviderBaseUrl(config.baseUrl());
+            response.setProviderBrandName(config.brandName());
+            response.setProviderWebhookId(config.webhookId());
+            response.setProviderClientId(config.clientId());
+            response.setProviderClientSecretConfigured(!"missing".equals(config.clientSecretSource()));
+            response.setProviderClientSecretSource(config.clientSecretSource());
+            response.setProviderConfigurationAvailable(config.isAvailable());
+        } else if ("FABRICK".equals(provider)) {
+            PaymentMethodProviderConfigurationResolver.ResolvedFabrickConfig config = resolveFabrickConfig(method);
+            response.setProviderEnvironment(config.environment());
+            response.setProviderBaseUrl(config.baseUrl());
+            response.setProviderShopLogin(config.shopLogin());
+            response.setProviderApiKeyConfigured(!"missing".equals(config.apiKeySource()));
+            response.setProviderApiKeySource(config.apiKeySource());
+            response.setProviderLightboxScriptUrl(config.lightboxScriptUrl());
+            response.setProviderNotificationUrl(config.notificationUrl());
+            response.setProviderConfigurationAvailable(config.isAvailable());
+        }
+        return response;
+    }
+
     private PaymentMethodResponse toMethodResponse(PaymentMethod method) {
         PaymentMethodResponse response = new PaymentMethodResponse();
         response.setId(method.getId());
@@ -917,6 +1004,34 @@ public class PaymentService {
         response.setActive(method.getActive());
         response.setSortOrder(method.getSortOrder());
         return response;
+    }
+
+    private PaymentMethodProviderConfigurationResolver.ResolvedPayPalConfig resolvePayPalConfig(PaymentMethod method) {
+        return providerConfigurationResolver.resolvePayPal(method);
+    }
+
+    private PaymentMethodProviderConfigurationResolver.ResolvedFabrickConfig resolveFabrickConfig(PaymentMethod method) {
+        return providerConfigurationResolver.resolveFabrick(method);
+    }
+
+    private PaymentMethod resolveMethodForPayment(Payment payment) {
+        String methodCode = trimToNull(payment.getMethodCode());
+        if (methodCode != null) {
+            return paymentMethodRepository.findByCode(methodCode).orElseGet(() -> fallbackMethodForProvider(payment.getProvider()));
+        }
+        return fallbackMethodForProvider(payment.getProvider());
+    }
+
+    private PaymentMethod fallbackMethodForProvider(String provider) {
+        String normalizedProvider = provider == null ? "OFFLINE" : provider.trim().toUpperCase(Locale.ROOT);
+        PaymentMethod method = new PaymentMethod();
+        method.setProvider(normalizedProvider);
+        method.setCode(normalizeMethodCode(null, normalizedProvider));
+        method.setDisplayName(normalizedProvider);
+        method.setPaymentFlow("OFFLINE");
+        method.setActive(true);
+        method.setSortOrder(0);
+        return method;
     }
 
     private PaymentResponse toResponse(Payment payment) {

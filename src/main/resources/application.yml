@@ -44,6 +44,8 @@ spring:
           jwk-set-uri: ${KEYCLOAK_JWK_SET_URI:http://keycloak.${PLATFORM_NAMESPACE:platform}.svc.cluster.local/realms/master/protocol/openid-connect/certs}
 
 payment:
+  config:
+    master-key: ${PAYMENT_CONFIG_MASTER_KEY:}
   events:
     enabled: ${PAYMENT_EVENTS_ENABLED:true}
     topic: ${PAYMENT_EVENTS_TOPIC:payment.events}

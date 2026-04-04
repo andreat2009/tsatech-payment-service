@@ -1,0 +1,10 @@
+ALTER TABLE payment_method ADD COLUMN IF NOT EXISTS provider_environment VARCHAR(32);
+ALTER TABLE payment_method ADD COLUMN IF NOT EXISTS provider_base_url VARCHAR(512);
+ALTER TABLE payment_method ADD COLUMN IF NOT EXISTS provider_brand_name VARCHAR(255);
+ALTER TABLE payment_method ADD COLUMN IF NOT EXISTS provider_webhook_id VARCHAR(255);
+ALTER TABLE payment_method ADD COLUMN IF NOT EXISTS provider_client_id VARCHAR(512);
+ALTER TABLE payment_method ADD COLUMN IF NOT EXISTS provider_client_secret_encrypted TEXT;
+ALTER TABLE payment_method ADD COLUMN IF NOT EXISTS provider_shop_login VARCHAR(255);
+ALTER TABLE payment_method ADD COLUMN IF NOT EXISTS provider_api_key_encrypted TEXT;
+ALTER TABLE payment_method ADD COLUMN IF NOT EXISTS provider_lightbox_script_url VARCHAR(1024);
+ALTER TABLE payment_method ADD COLUMN IF NOT EXISTS provider_notification_url VARCHAR(1024);

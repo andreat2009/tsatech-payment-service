@@ -67,6 +67,12 @@ spec:
                 secretKeyRef:
                   name: {{ include "app.secretName" $ }}
                   key: DB_PASSWORD
+            - name: PAYMENT_CONFIG_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "app.secretName" $ }}
+                  key: PAYMENT_CONFIG_MASTER_KEY
+                  optional: true
 
 {{- if not (hasKey .Values.env "SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE") }}
             - name: SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE

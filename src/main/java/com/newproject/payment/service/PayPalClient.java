@@ -23,33 +23,28 @@ import org.springframework.stereotype.Component;
 
 @Component
 public class PayPalClient {
-    private final PaymentProviderProperties properties;
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient;
 
-    public PayPalClient(PaymentProviderProperties properties, ObjectMapper objectMapper) {
-        this.properties = properties;
+    public PayPalClient(ObjectMapper objectMapper) {
         this.objectMapper = objectMapper;
         this.httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).build();
     }
 
-    public boolean isAvailable() {
-        return properties.getPaypal().isEnabled()
-            && notBlank(properties.getPaypal().getClientId())
-            && notBlank(properties.getPaypal().getClientSecret())
-            && notBlank(properties.getPaypal().getBaseUrl());
+    public boolean isAvailable(PaymentMethodProviderConfigurationResolver.ResolvedPayPalConfig config) {
+        return config != null && config.isAvailable();
     }
 
-    public boolean isWebhookVerificationAvailable() {
-        return isAvailable() && notBlank(properties.getPaypal().getWebhookId());
+    public boolean isWebhookVerificationAvailable(PaymentMethodProviderConfigurationResolver.ResolvedPayPalConfig config) {
+        return config != null && config.isWebhookVerificationAvailable();
     }
 
-    public PayPalCreateResult createOrder(Payment payment, PaymentRequest request) {
-        if (!isAvailable()) {
-            throw new BadRequestException("PayPal sandbox/production credentials are not configured");
+    public PayPalCreateResult createOrder(PaymentMethodProviderConfigurationResolver.ResolvedPayPalConfig config, Payment payment, PaymentRequest request) {
+        if (!isAvailable(config)) {
+            throw new BadRequestException("PayPal credentials are not configured");
         }
         try {
-            String accessToken = obtainAccessToken();
+            String accessToken = obtainAccessToken(config);
             Map<String, Object> body = new LinkedHashMap<>();
             body.put("intent", "CAPTURE");
             body.put("purchase_units", List.of(Map.of(
@@ -64,7 +59,7 @@ public class PayPalClient {
             body.put("payment_source", Map.of(
                 "paypal", Map.of(
                     "experience_context", Map.of(
-                        "brand_name", properties.getPaypal().getBrandName(),
+                        "brand_name", notBlank(config.brandName()) ? config.brandName() : "TSA Store",
                         "shipping_preference", "NO_SHIPPING",
                         "user_action", "PAY_NOW",
                         "return_url", request.getReturnUrl(),
@@ -73,7 +68,7 @@ public class PayPalClient {
                 )
             ));
 
-            HttpRequest httpRequest = HttpRequest.newBuilder(URI.create(trimTrailingSlash(properties.getPaypal().getBaseUrl()) + "/v2/checkout/orders"))
+            HttpRequest httpRequest = HttpRequest.newBuilder(URI.create(trimTrailingSlash(config.baseUrl()) + "/v2/checkout/orders"))
                 .timeout(Duration.ofSeconds(20))
                 .header("Authorization", "Bearer " + accessToken)
                 .header("Content-Type", "application/json")
@@ -104,17 +99,17 @@ public class PayPalClient {
         }
     }
 
-    public PayPalCaptureResult captureOrder(Payment payment, String token) {
-        if (!isAvailable()) {
-            throw new BadRequestException("PayPal sandbox/production credentials are not configured");
+    public PayPalCaptureResult captureOrder(PaymentMethodProviderConfigurationResolver.ResolvedPayPalConfig config, Payment payment, String token) {
+        if (!isAvailable(config)) {
+            throw new BadRequestException("PayPal credentials are not configured");
         }
         String paypalOrderId = notBlank(token) ? token : payment.getProviderOrderId();
         if (!notBlank(paypalOrderId)) {
             throw new BadRequestException("PayPal order token is missing");
         }
         try {
-            String accessToken = obtainAccessToken();
-            HttpRequest httpRequest = HttpRequest.newBuilder(URI.create(trimTrailingSlash(properties.getPaypal().getBaseUrl()) + "/v2/checkout/orders/" + paypalOrderId + "/capture"))
+            String accessToken = obtainAccessToken(config);
+            HttpRequest httpRequest = HttpRequest.newBuilder(URI.create(trimTrailingSlash(config.baseUrl()) + "/v2/checkout/orders/" + paypalOrderId + "/capture"))
                 .timeout(Duration.ofSeconds(20))
                 .header("Authorization", "Bearer " + accessToken)
                 .header("Content-Type", "application/json")
@@ -144,15 +139,15 @@ public class PayPalClient {
         }
     }
 
-    public PayPalRefundResult refundCapture(String captureId, BigDecimal amount, String currency, String reason, String requestId) {
-        if (!isAvailable()) {
-            throw new BadRequestException("PayPal sandbox/production credentials are not configured");
+    public PayPalRefundResult refundCapture(PaymentMethodProviderConfigurationResolver.ResolvedPayPalConfig config, String captureId, BigDecimal amount, String currency, String reason, String requestId) {
+        if (!isAvailable(config)) {
+            throw new BadRequestException("PayPal credentials are not configured");
         }
         if (!notBlank(captureId)) {
             throw new BadRequestException("PayPal capture id is missing");
         }
         try {
-            String accessToken = obtainAccessToken();
+            String accessToken = obtainAccessToken(config);
             Map<String, Object> body = new LinkedHashMap<>();
             if (amount != null) {
                 body.put("amount", Map.of(
@@ -164,7 +159,7 @@ public class PayPalClient {
                 body.put("note_to_payer", reason);
             }
 
-            HttpRequest httpRequest = HttpRequest.newBuilder(URI.create(trimTrailingSlash(properties.getPaypal().getBaseUrl()) + "/v2/payments/captures/" + captureId + "/refund"))
+            HttpRequest httpRequest = HttpRequest.newBuilder(URI.create(trimTrailingSlash(config.baseUrl()) + "/v2/payments/captures/" + captureId + "/refund"))
                 .timeout(Duration.ofSeconds(20))
                 .header("Authorization", "Bearer " + accessToken)
                 .header("Content-Type", "application/json")
@@ -187,16 +182,16 @@ public class PayPalClient {
         }
     }
 
-    public PayPalOrderSnapshot fetchOrderSnapshot(String providerOrderId) {
-        if (!isAvailable()) {
-            throw new BadRequestException("PayPal sandbox/production credentials are not configured");
+    public PayPalOrderSnapshot fetchOrderSnapshot(PaymentMethodProviderConfigurationResolver.ResolvedPayPalConfig config, String providerOrderId) {
+        if (!isAvailable(config)) {
+            throw new BadRequestException("PayPal credentials are not configured");
         }
         if (!notBlank(providerOrderId)) {
             throw new BadRequestException("PayPal order id is missing");
         }
         try {
-            String accessToken = obtainAccessToken();
-            HttpRequest httpRequest = HttpRequest.newBuilder(URI.create(trimTrailingSlash(properties.getPaypal().getBaseUrl()) + "/v2/checkout/orders/" + providerOrderId))
+            String accessToken = obtainAccessToken(config);
+            HttpRequest httpRequest = HttpRequest.newBuilder(URI.create(trimTrailingSlash(config.baseUrl()) + "/v2/checkout/orders/" + providerOrderId))
                 .timeout(Duration.ofSeconds(20))
                 .header("Authorization", "Bearer " + accessToken)
                 .header("Content-Type", "application/json")
@@ -238,6 +233,7 @@ public class PayPalClient {
     }
 
     public boolean verifyWebhookSignature(
+        PaymentMethodProviderConfigurationResolver.ResolvedPayPalConfig config,
         String transmissionId,
         String transmissionTime,
         String certUrl,
@@ -245,21 +241,21 @@ public class PayPalClient {
         String transmissionSig,
         String requestBody
     ) {
-        if (!isWebhookVerificationAvailable()) {
-            throw new BadRequestException("PayPal webhook verification is not available. Configure PAYMENT_PAYPAL_WEBHOOK_ID first.");
+        if (!isWebhookVerificationAvailable(config)) {
+            throw new BadRequestException("PayPal webhook verification is not available. Configure the webhook id first.");
         }
         try {
-            String accessToken = obtainAccessToken();
+            String accessToken = obtainAccessToken(config);
             Map<String, Object> verificationRequest = new LinkedHashMap<>();
             verificationRequest.put("transmission_id", transmissionId);
             verificationRequest.put("transmission_time", transmissionTime);
             verificationRequest.put("cert_url", certUrl);
             verificationRequest.put("auth_algo", authAlgo);
             verificationRequest.put("transmission_sig", transmissionSig);
-            verificationRequest.put("webhook_id", properties.getPaypal().getWebhookId());
+            verificationRequest.put("webhook_id", config.webhookId());
             verificationRequest.put("webhook_event", objectMapper.readTree(requestBody));
 
-            HttpRequest request = HttpRequest.newBuilder(URI.create(trimTrailingSlash(properties.getPaypal().getBaseUrl()) + "/v1/notifications/verify-webhook-signature"))
+            HttpRequest request = HttpRequest.newBuilder(URI.create(trimTrailingSlash(config.baseUrl()) + "/v1/notifications/verify-webhook-signature"))
                 .timeout(Duration.ofSeconds(20))
                 .header("Authorization", "Bearer " + accessToken)
                 .header("Content-Type", "application/json")
@@ -277,10 +273,10 @@ public class PayPalClient {
         }
     }
 
-    private String obtainAccessToken() throws IOException, InterruptedException {
-        String credentials = properties.getPaypal().getClientId() + ":" + properties.getPaypal().getClientSecret();
+    private String obtainAccessToken(PaymentMethodProviderConfigurationResolver.ResolvedPayPalConfig config) throws IOException, InterruptedException {
+        String credentials = config.clientId() + ":" + config.clientSecret();
         String basic = Base64.getEncoder().encodeToString(credentials.getBytes(StandardCharsets.UTF_8));
-        HttpRequest tokenRequest = HttpRequest.newBuilder(URI.create(trimTrailingSlash(properties.getPaypal().getBaseUrl()) + "/v1/oauth2/token"))
+        HttpRequest tokenRequest = HttpRequest.newBuilder(URI.create(trimTrailingSlash(config.baseUrl()) + "/v1/oauth2/token"))
             .timeout(Duration.ofSeconds(15))
             .header("Authorization", "Basic " + basic)
             .header("Content-Type", "application/x-www-form-urlencoded")
@@ -315,7 +311,7 @@ public class PayPalClient {
         if (response.statusCode() >= 200 && response.statusCode() < 300) {
             return;
         }
-        throw new BadRequestException("" + operation + " failed with HTTP " + response.statusCode() + ": " + response.body());
+        throw new BadRequestException(operation + " failed with HTTP " + response.statusCode() + ": " + response.body());
     }
 
     private String formatAmount(BigDecimal amount) {

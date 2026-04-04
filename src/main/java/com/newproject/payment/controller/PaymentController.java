@@ -1,5 +1,6 @@
 package com.newproject.payment.controller;
 
+import com.newproject.payment.dto.AdminPaymentMethodResponse;
 import com.newproject.payment.dto.FabrickCompletionRequest;
 import com.newproject.payment.dto.PaymentMethodRequest;
 import com.newproject.payment.dto.PaymentMethodResponse;
@@ -28,23 +29,23 @@ public class PaymentController {
     }
 
     @GetMapping("/admin/methods")
-    public List<PaymentMethodResponse> listAdminMethods() {
+    public List<AdminPaymentMethodResponse> listAdminMethods() {
         return paymentService.listAdminMethods();
     }
 
     @GetMapping("/admin/methods/{id}")
-    public PaymentMethodResponse getAdminMethod(@PathVariable Long id) {
+    public AdminPaymentMethodResponse getAdminMethod(@PathVariable Long id) {
         return paymentService.getAdminMethod(id);
     }
 
     @PostMapping("/admin/methods")
     @ResponseStatus(HttpStatus.CREATED)
-    public PaymentMethodResponse createAdminMethod(@Valid @RequestBody PaymentMethodRequest request) {
+    public AdminPaymentMethodResponse createAdminMethod(@Valid @RequestBody PaymentMethodRequest request) {
         return paymentService.createAdminMethod(request);
     }
 
     @PutMapping("/admin/methods/{id}")
-    public PaymentMethodResponse updateAdminMethod(@PathVariable Long id, @Valid @RequestBody PaymentMethodRequest request) {
+    public AdminPaymentMethodResponse updateAdminMethod(@PathVariable Long id, @Valid @RequestBody PaymentMethodRequest request) {
         return paymentService.updateAdminMethod(id, request);
     }
 
