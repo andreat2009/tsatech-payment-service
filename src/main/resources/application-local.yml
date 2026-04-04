@@ -1,0 +1,17 @@
+spring:
+  config:
+    activate:
+      on-profile: local
+
+providers:
+  paypal:
+    enabled: ${PAYMENT_PAYPAL_ENABLED:true}
+    environment: sandbox
+    base-url: https://api-m.sandbox.paypal.com
+    webhook-id: ${PAYMENT_PAYPAL_WEBHOOK_ID:}
+  fabrick:
+    enabled: ${PAYMENT_FABRICK_ENABLED:true}
+    environment: sandbox
+    base-url: https://sandbox.gestpay.net
+    lightbox-script-url: https://sandbox.gestpay.net/pagam/javascript/axerve.js
+    notification-url: ${PAYMENT_FABRICK_NOTIFICATION_URL:http://localhost:${SERVER_PORT:8087}/api/payments/webhooks/fabrick}

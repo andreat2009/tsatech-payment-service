@@ -7,7 +7,6 @@ import java.util.Map;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
-import org.springframework.security.authentication.AbstractAuthenticationToken;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.core.GrantedAuthority;
@@ -25,7 +24,16 @@ public class SecurityConfig {
             .csrf(AbstractHttpConfigurer::disable)
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers(HttpMethod.GET, "/actuator/health", "/actuator/info").permitAll()
-                .requestMatchers(HttpMethod.POST, "/api/payments").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/payments/methods").permitAll()
+                .requestMatchers(HttpMethod.POST,
+                    "/api/payments",
+                    "/api/payments/*/capture/paypal",
+                    "/api/payments/*/complete/fabrick",
+                    "/api/payments/webhooks/paypal",
+                    "/api/payments/webhooks/fabrick"
+                ).permitAll()
+                .requestMatchers("/api/payments/admin/**").hasAnyAuthority("ROLE_ADMIN", "ROLE_admin")
+                .requestMatchers(HttpMethod.POST, "/api/payments/*/refund", "/api/payments/*/reconcile").hasAnyAuthority("ROLE_ADMIN", "ROLE_admin")
                 .requestMatchers("/api/payments/**").authenticated()
                 .anyRequest().authenticated()
             )

@@ -9,4 +9,10 @@ public interface PaymentRepository extends JpaRepository<Payment, Long> {
     List<Payment> findByOrderId(Long orderId);
 
     Optional<Payment> findFirstByOrderIdOrderByIdAsc(Long orderId);
+
+    Optional<Payment> findFirstByProviderOrderId(String providerOrderId);
+
+    Optional<Payment> findFirstByProviderPaymentId(String providerPaymentId);
+
+    Optional<Payment> findFirstByLightboxPaymentToken(String lightboxPaymentToken);
 }
