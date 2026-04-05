@@ -132,6 +132,7 @@ public class PaymentService {
         payment.setLastReconciledAt(null);
         payment.setLastWebhookAt(null);
         payment.setLastProviderSyncAt(null);
+        payment.setStatus(trimToNull(request.getStatus()) != null ? trimToNull(request.getStatus()) : "CREATED");
         if (created) {
             payment.setCreatedAt(now);
         }
