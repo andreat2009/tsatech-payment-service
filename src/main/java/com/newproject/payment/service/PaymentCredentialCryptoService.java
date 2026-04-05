@@ -16,18 +16,27 @@ public class PaymentCredentialCryptoService {
     private static final String PREFIX = "enc:v1";
 
     private final String explicitMasterKey;
+    private final String envMasterKey;
     private final String datasourcePassword;
+    private final String envDatasourcePassword;
     private final String datasourceUrl;
+    private final String envDatasourceUrl;
     private final SecureRandom secureRandom = new SecureRandom();
 
     public PaymentCredentialCryptoService(
         @Value("${payment.config.master-key:}") String explicitMasterKey,
+        @Value("${PAYMENT_CONFIG_MASTER_KEY:}") String envMasterKey,
         @Value("${spring.datasource.password:}") String datasourcePassword,
-        @Value("${spring.datasource.url:}") String datasourceUrl
+        @Value("${DB_PASSWORD:}") String envDatasourcePassword,
+        @Value("${spring.datasource.url:}") String datasourceUrl,
+        @Value("${SPRING_DATASOURCE_URL:}") String envDatasourceUrl
     ) {
         this.explicitMasterKey = explicitMasterKey;
+        this.envMasterKey = envMasterKey;
         this.datasourcePassword = datasourcePassword;
+        this.envDatasourcePassword = envDatasourcePassword;
         this.datasourceUrl = datasourceUrl;
+        this.envDatasourceUrl = envDatasourceUrl;
     }
 
     public String encrypt(String plainText) {
@@ -54,12 +63,13 @@ public class PaymentCredentialCryptoService {
             return encryptedValue;
         }
         try {
-            String[] parts = encryptedValue.split(":", 3);
-            if (parts.length != 3) {
+            String encodedPayload = encryptedValue.substring((PREFIX + ':').length());
+            String[] parts = encodedPayload.split(":", 2);
+            if (parts.length != 2) {
                 throw new IllegalStateException("Invalid encrypted credential payload");
             }
-            byte[] iv = Base64.getDecoder().decode(parts[1]);
-            byte[] payload = Base64.getDecoder().decode(parts[2]);
+            byte[] iv = Base64.getDecoder().decode(parts[0]);
+            byte[] payload = Base64.getDecoder().decode(parts[1]);
             Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
             cipher.init(Cipher.DECRYPT_MODE, resolveKey(), new GCMParameterSpec(128, iv));
             return new String(cipher.doFinal(payload), StandardCharsets.UTF_8);
@@ -69,17 +79,23 @@ public class PaymentCredentialCryptoService {
     }
 
     public String keySource() {
-        return hasText(explicitMasterKey) ? "master-key" : "db-password-derived";
+        if (hasText(explicitMasterKey) || hasText(envMasterKey)) {
+            return "master-key";
+        }
+        return hasText(datasourcePassword) || hasText(envDatasourcePassword) ? "db-password-derived" : "missing";
     }
 
     private SecretKeySpec resolveKey() {
         try {
             byte[] keyMaterial;
-            if (hasText(explicitMasterKey)) {
-                keyMaterial = decodeKey(explicitMasterKey.trim());
-            } else if (hasText(datasourcePassword)) {
+            String effectiveMasterKey = firstNonBlank(explicitMasterKey, envMasterKey);
+            String effectiveDatasourcePassword = firstNonBlank(datasourcePassword, envDatasourcePassword);
+            String effectiveDatasourceUrl = firstNonBlank(datasourceUrl, envDatasourceUrl, "jdbc:unknown");
+            if (hasText(effectiveMasterKey)) {
+                keyMaterial = decodeKey(effectiveMasterKey.trim());
+            } else if (hasText(effectiveDatasourcePassword)) {
                 MessageDigest digest = MessageDigest.getInstance("SHA-256");
-                keyMaterial = digest.digest(("tsa-payment-config|" + datasourceUrl + '|' + datasourcePassword).getBytes(StandardCharsets.UTF_8));
+                keyMaterial = digest.digest(("tsa-payment-config|" + effectiveDatasourceUrl + '|' + effectiveDatasourcePassword).getBytes(StandardCharsets.UTF_8));
             } else {
                 throw new IllegalStateException("No master key or datasource password available for payment credential encryption");
             }
@@ -87,6 +103,18 @@ public class PaymentCredentialCryptoService {
         } catch (Exception ex) {
             throw new IllegalStateException("Unable to resolve payment credential encryption key", ex);
         }
+    }
+
+    private String firstNonBlank(String... values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            if (hasText(value)) {
+                return value.trim();
+            }
+        }
+        return null;
     }
 
     private byte[] decodeKey(String value) {
