@@ -11,6 +11,7 @@ import com.newproject.payment.dto.PaymentMethodResponse;
 import com.newproject.payment.dto.PaymentRefundRequest;
 import com.newproject.payment.dto.PaymentRequest;
 import com.newproject.payment.dto.PaymentResponse;
+import com.newproject.payment.dto.PaymentTransactionResponse;
 import com.newproject.payment.service.PaymentInstrumentService;
 import com.newproject.payment.service.PaymentService;
 import com.newproject.payment.service.PaymentVaultService;
@@ -112,13 +113,24 @@ public class PaymentController {
     }
 
     @GetMapping
-    public List<PaymentResponse> list(@RequestParam(value = "orderId", required = false) Long orderId) {
-        return paymentService.list(orderId);
+    public List<PaymentResponse> list(
+        @RequestParam(value = "orderId", required = false) Long orderId,
+        @RequestParam(value = "status", required = false) String status,
+        @RequestParam(value = "provider", required = false) String provider,
+        @RequestParam(value = "failureOnly", required = false) Boolean failureOnly,
+        @RequestParam(value = "query", required = false) String query
+    ) {
+        return paymentService.list(orderId, status, provider, failureOnly, query);
     }
 
     @GetMapping("/{id}")
     public PaymentResponse get(@PathVariable Long id) {
         return paymentService.get(id);
+    }
+
+    @GetMapping("/{id}/transactions")
+    public List<PaymentTransactionResponse> listTransactions(@PathVariable Long id) {
+        return paymentService.listTransactions(id);
     }
 
     @PostMapping

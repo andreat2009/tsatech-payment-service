@@ -12,6 +12,7 @@ import com.newproject.payment.dto.PaymentMethodResponse;
 import com.newproject.payment.dto.PaymentRefundRequest;
 import com.newproject.payment.dto.PaymentRequest;
 import com.newproject.payment.dto.PaymentResponse;
+import com.newproject.payment.dto.PaymentTransactionResponse;
 import com.newproject.payment.events.EventPublisher;
 import com.newproject.payment.exception.BadRequestException;
 import com.newproject.payment.exception.NotFoundException;
@@ -20,12 +21,15 @@ import com.newproject.payment.repository.PaymentRepository;
 import com.newproject.payment.repository.PaymentTransactionRepository;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Collectors;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -466,10 +470,30 @@ public class PaymentService {
 
     @Transactional(readOnly = true)
     public List<PaymentResponse> list(Long orderId) {
-        if (orderId != null) {
+        return list(orderId, null, null, null, null);
+    }
+
+    @Transactional(readOnly = true)
+    public List<PaymentResponse> list(Long orderId, String status, String provider, Boolean failureOnly, String query) {
+        if (orderId != null
+            && trimToNull(status) == null
+            && trimToNull(provider) == null
+            && !Boolean.TRUE.equals(failureOnly)
+            && trimToNull(query) == null) {
             return paymentRepository.findByOrderId(orderId).stream().map(this::toResponse).collect(Collectors.toList());
         }
-        return paymentRepository.findAll().stream().map(this::toResponse).collect(Collectors.toList());
+
+        Specification<Payment> specification = buildPaymentSpecification(orderId, status, provider, failureOnly, query);
+        Sort sort = Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("id"));
+        return paymentRepository.findAll(specification, sort).stream().map(this::toResponse).collect(Collectors.toList());
+    }
+
+    @Transactional(readOnly = true)
+    public List<PaymentTransactionResponse> listTransactions(Long paymentId) {
+        findPayment(paymentId);
+        return paymentTransactionRepository.findByPaymentIdOrderByIdDesc(paymentId).stream()
+            .map(this::toTransactionResponse)
+            .toList();
     }
 
     @Transactional
@@ -1048,6 +1072,87 @@ public class PaymentService {
         method.setActive(true);
         method.setSortOrder(0);
         return method;
+    }
+
+    private Specification<Payment> buildPaymentSpecification(Long orderId, String status, String provider, Boolean failureOnly, String query) {
+        return (root, criteriaQuery, criteriaBuilder) -> {
+            List<jakarta.persistence.criteria.Predicate> predicates = new ArrayList<>();
+
+            if (orderId != null) {
+                predicates.add(criteriaBuilder.equal(root.get("orderId"), orderId));
+            }
+
+            String normalizedStatus = trimToNull(status);
+            if (normalizedStatus != null) {
+                predicates.add(criteriaBuilder.equal(
+                    criteriaBuilder.lower(criteriaBuilder.coalesce(root.get("status"), "")),
+                    normalizedStatus.toLowerCase(Locale.ROOT)
+                ));
+            }
+
+            String normalizedProvider = trimToNull(provider);
+            if (normalizedProvider != null) {
+                predicates.add(criteriaBuilder.equal(
+                    criteriaBuilder.lower(criteriaBuilder.coalesce(root.get("provider"), "")),
+                    normalizedProvider.toLowerCase(Locale.ROOT)
+                ));
+            }
+
+            if (Boolean.TRUE.equals(failureOnly)) {
+                predicates.add(criteriaBuilder.or(
+                    criteriaBuilder.isNotNull(root.get("failureCode")),
+                    criteriaBuilder.isNotNull(root.get("failureReason")),
+                    criteriaBuilder.equal(criteriaBuilder.lower(criteriaBuilder.coalesce(root.get("status"), "")), "failed"),
+                    criteriaBuilder.equal(criteriaBuilder.lower(criteriaBuilder.coalesce(root.get("status"), "")), "cancelled")
+                ));
+            }
+
+            String normalizedQuery = trimToNull(query);
+            if (normalizedQuery != null) {
+                String loweredQuery = normalizedQuery.toLowerCase(Locale.ROOT);
+                String likePattern = "%" + loweredQuery + "%";
+                List<jakarta.persistence.criteria.Predicate> queryPredicates = new ArrayList<>();
+                Long numericQuery = parseLong(normalizedQuery);
+                if (numericQuery != null) {
+                    queryPredicates.add(criteriaBuilder.equal(root.get("id"), numericQuery));
+                    queryPredicates.add(criteriaBuilder.equal(root.get("orderId"), numericQuery));
+                }
+                queryPredicates.add(criteriaBuilder.like(criteriaBuilder.lower(criteriaBuilder.coalesce(root.get("provider"), "")), likePattern));
+                queryPredicates.add(criteriaBuilder.like(criteriaBuilder.lower(criteriaBuilder.coalesce(root.get("methodCode"), "")), likePattern));
+                queryPredicates.add(criteriaBuilder.like(criteriaBuilder.lower(criteriaBuilder.coalesce(root.get("methodLabel"), "")), likePattern));
+                queryPredicates.add(criteriaBuilder.like(criteriaBuilder.lower(criteriaBuilder.coalesce(root.get("providerOrderId"), "")), likePattern));
+                queryPredicates.add(criteriaBuilder.like(criteriaBuilder.lower(criteriaBuilder.coalesce(root.get("providerPaymentId"), "")), likePattern));
+                queryPredicates.add(criteriaBuilder.like(criteriaBuilder.lower(criteriaBuilder.coalesce(root.get("failureCode"), "")), likePattern));
+                queryPredicates.add(criteriaBuilder.like(criteriaBuilder.lower(criteriaBuilder.coalesce(root.get("failureReason"), "")), likePattern));
+                queryPredicates.add(criteriaBuilder.like(criteriaBuilder.lower(criteriaBuilder.coalesce(root.get("status"), "")), likePattern));
+                predicates.add(criteriaBuilder.or(queryPredicates.toArray(jakarta.persistence.criteria.Predicate[]::new)));
+            }
+
+            if (predicates.isEmpty()) {
+                return criteriaBuilder.conjunction();
+            }
+            return criteriaBuilder.and(predicates.toArray(jakarta.persistence.criteria.Predicate[]::new));
+        };
+    }
+
+    private PaymentTransactionResponse toTransactionResponse(PaymentTransaction transaction) {
+        PaymentTransactionResponse response = new PaymentTransactionResponse();
+        response.setId(transaction.getId());
+        response.setPaymentId(transaction.getPayment() != null ? transaction.getPayment().getId() : null);
+        response.setOrderId(transaction.getOrderId());
+        response.setOperationType(transaction.getOperationType());
+        response.setEventSource(transaction.getEventSource());
+        response.setStatus(transaction.getStatus());
+        response.setProviderStatus(transaction.getProviderStatus());
+        response.setProviderReference(transaction.getProviderReference());
+        response.setAmount(transaction.getAmount());
+        response.setCurrency(transaction.getCurrency());
+        response.setFailureCode(transaction.getFailureCode());
+        response.setFailureReason(transaction.getFailureReason());
+        response.setRawPayload(transaction.getRawPayload());
+        response.setCreatedAt(transaction.getCreatedAt());
+        response.setUpdatedAt(transaction.getUpdatedAt());
+        return response;
     }
 
     private PaymentResponse toResponse(Payment payment) {
