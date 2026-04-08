@@ -12,6 +12,8 @@ public class PaymentMethodResponse {
     private String providerBrandName;
     private String providerLightboxScriptUrl;
     private Boolean providerConfigurationAvailable;
+    private String providerClientId;
+    private String browserTokenizationMode;
 
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
@@ -35,4 +37,8 @@ public class PaymentMethodResponse {
     public void setProviderLightboxScriptUrl(String providerLightboxScriptUrl) { this.providerLightboxScriptUrl = providerLightboxScriptUrl; }
     public Boolean getProviderConfigurationAvailable() { return providerConfigurationAvailable; }
     public void setProviderConfigurationAvailable(Boolean providerConfigurationAvailable) { this.providerConfigurationAvailable = providerConfigurationAvailable; }
+    public String getProviderClientId() { return providerClientId; }
+    public void setProviderClientId(String providerClientId) { this.providerClientId = providerClientId; }
+    public String getBrowserTokenizationMode() { return browserTokenizationMode; }
+    public void setBrowserTokenizationMode(String browserTokenizationMode) { this.browserTokenizationMode = browserTokenizationMode; }
 }

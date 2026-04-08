@@ -25,19 +25,22 @@ public class PaymentInstrumentService {
     private final PaymentCredentialCryptoService paymentCredentialCryptoService;
     private final PaymentMethodProviderConfigurationResolver providerConfigurationResolver;
     private final RequestActor requestActor;
+    private final PayPalClient payPalClient;
 
     public PaymentInstrumentService(
         PaymentInstrumentRepository paymentInstrumentRepository,
         PaymentMethodRepository paymentMethodRepository,
         PaymentCredentialCryptoService paymentCredentialCryptoService,
         PaymentMethodProviderConfigurationResolver providerConfigurationResolver,
-        RequestActor requestActor
+        RequestActor requestActor,
+        PayPalClient payPalClient
     ) {
         this.paymentInstrumentRepository = paymentInstrumentRepository;
         this.paymentMethodRepository = paymentMethodRepository;
         this.paymentCredentialCryptoService = paymentCredentialCryptoService;
         this.providerConfigurationResolver = providerConfigurationResolver;
         this.requestActor = requestActor;
+        this.payPalClient = payPalClient;
     }
 
     @Transactional(readOnly = true)
@@ -51,8 +54,9 @@ public class PaymentInstrumentService {
     @Transactional
     public PaymentInstrumentResponse create(Long customerId, PaymentInstrumentRequest request) {
         Long scopedCustomerId = requestActor.resolveScopedCustomerId(customerId);
-        String providerToken = requiredTrimmed(request.getProviderToken(), "providerToken");
         PaymentMethod method = resolveTokenizableMethod(request.getPaymentMethodCode());
+        ResolvedProviderToken resolvedProviderToken = resolveProviderToken(method, request);
+        String providerToken = requiredTrimmed(resolvedProviderToken.providerToken(), "providerToken");
         String fingerprint = fingerprint(providerToken);
 
         PaymentInstrument instrument = paymentInstrumentRepository.findFirstByCustomerIdAndProviderTokenFingerprint(scopedCustomerId, fingerprint)
@@ -64,7 +68,7 @@ public class PaymentInstrumentService {
             instrument.setCreatedAt(now);
         }
 
-        applyRequest(instrument, request, method, providerToken, fingerprint);
+        applyRequest(instrument, request, method, providerToken, fingerprint, resolvedProviderToken);
         instrument.setUpdatedAt(now);
         PaymentInstrument saved = paymentInstrumentRepository.save(instrument);
         synchronizeDefaults(saved);
@@ -78,10 +82,11 @@ public class PaymentInstrumentService {
             .orElseThrow(() -> new NotFoundException("Payment instrument not found"));
 
         PaymentMethod method = resolveTokenizableMethod(firstNonBlank(trimToNull(request.getPaymentMethodCode()), instrument.getPaymentMethodCode()));
-        String providerToken = trimToNull(request.getProviderToken());
+        ResolvedProviderToken resolvedProviderToken = resolveProviderToken(method, request);
+        String providerToken = trimToNull(resolvedProviderToken.providerToken());
         String fingerprint = providerToken != null ? fingerprint(providerToken) : instrument.getProviderTokenFingerprint();
 
-        applyRequest(instrument, request, method, providerToken, fingerprint);
+        applyRequest(instrument, request, method, providerToken, fingerprint, resolvedProviderToken);
         instrument.setUpdatedAt(OffsetDateTime.now());
         PaymentInstrument saved = paymentInstrumentRepository.save(instrument);
         synchronizeDefaults(saved);
@@ -96,15 +101,29 @@ public class PaymentInstrumentService {
         paymentInstrumentRepository.delete(instrument);
     }
 
-    private void applyRequest(PaymentInstrument instrument, PaymentInstrumentRequest request, PaymentMethod method, String providerToken, String fingerprint) {
+    private void applyRequest(
+        PaymentInstrument instrument,
+        PaymentInstrumentRequest request,
+        PaymentMethod method,
+        String providerToken,
+        String fingerprint,
+        ResolvedProviderToken resolvedProviderToken
+    ) {
         instrument.setPaymentMethodCode(method.getCode());
         instrument.setProvider(method.getProvider().toUpperCase(Locale.ROOT));
-        instrument.setDisplayLabel(trimToNull(request.getDisplayLabel()));
-        instrument.setBrand(trimToNull(request.getBrand()));
+        instrument.setDisplayLabel(firstNonBlank(
+            trimToNull(request.getDisplayLabel()),
+            resolvedProviderToken.displayLabel(),
+            method.getDisplayName()
+        ));
+        instrument.setBrand(firstNonBlank(trimToNull(request.getBrand()), resolvedProviderToken.brand()));
         instrument.setLast4(normalizeLast4(request.getLast4()));
         instrument.setExpiryMonth(normalizeExpiryMonth(request.getExpiryMonth()));
         instrument.setExpiryYear(normalizeExpiryYear(request.getExpiryYear()));
-        instrument.setGatewayCustomerReference(trimToNull(request.getGatewayCustomerReference()));
+        instrument.setGatewayCustomerReference(firstNonBlank(
+            trimToNull(request.getGatewayCustomerReference()),
+            resolvedProviderToken.gatewayCustomerReference()
+        ));
         instrument.setActive(request.getActive() == null || request.getActive());
         instrument.setDefaultInstrument(Boolean.TRUE.equals(request.getDefaultInstrument()));
         if (providerToken != null) {
@@ -117,6 +136,32 @@ public class PaymentInstrumentService {
         if (Boolean.TRUE.equals(instrument.getDefaultInstrument())) {
             instrument.setActive(true);
         }
+    }
+
+    private ResolvedProviderToken resolveProviderToken(PaymentMethod method, PaymentInstrumentRequest request) {
+        String requestedToken = trimToNull(request.getProviderToken());
+        String provider = method.getProvider() == null ? "" : method.getProvider().trim().toUpperCase(Locale.ROOT);
+        String requestedTokenType = normalizeProviderTokenType(request.getProviderTokenType());
+
+        if (requestedToken == null) {
+            return new ResolvedProviderToken(null, null, null, null);
+        }
+
+        if ("PAYPAL".equals(provider) && "PAYPAL_SETUP_TOKEN".equals(requestedTokenType)) {
+            PaymentMethodProviderConfigurationResolver.ResolvedPayPalConfig config = providerConfigurationResolver.resolvePayPal(method);
+            PayPalClient.PayPalPaymentTokenResult paymentToken = payPalClient.createPaymentTokenFromSetupToken(config, requestedToken);
+            String defaultDisplayLabel = paymentToken.customerEmail() != null && !paymentToken.customerEmail().isBlank()
+                ? "PayPal - " + paymentToken.customerEmail()
+                : method.getDisplayName();
+            return new ResolvedProviderToken(
+                paymentToken.paymentTokenId(),
+                paymentToken.providerCustomerId(),
+                defaultDisplayLabel,
+                "PayPal"
+            );
+        }
+
+        return new ResolvedProviderToken(requestedToken, null, null, null);
     }
 
     private void synchronizeDefaults(PaymentInstrument saved) {
@@ -232,8 +277,22 @@ public class PaymentInstrumentService {
         return trimmed;
     }
 
-    private String firstNonBlank(String preferred, String fallback) {
-        return trimToNull(preferred) != null ? trimToNull(preferred) : trimToNull(fallback);
+    private String normalizeProviderTokenType(String value) {
+        String trimmed = trimToNull(value);
+        return trimmed == null ? null : trimmed.toUpperCase(Locale.ROOT);
+    }
+
+    private String firstNonBlank(String... values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            String trimmed = trimToNull(value);
+            if (trimmed != null) {
+                return trimmed;
+            }
+        }
+        return null;
     }
 
     private String trimToNull(String value) {
@@ -243,4 +302,11 @@ public class PaymentInstrumentService {
         String trimmed = value.trim();
         return trimmed.isBlank() ? null : trimmed;
     }
+
+    private record ResolvedProviderToken(
+        String providerToken,
+        String gatewayCustomerReference,
+        String displayLabel,
+        String brand
+    ) {}
 }

@@ -3,6 +3,7 @@ package com.newproject.payment.dto;
 public class PaymentInstrumentRequest {
     private String paymentMethodCode;
     private String providerToken;
+    private String providerTokenType;
     private String displayLabel;
     private String brand;
     private String last4;
@@ -16,6 +17,8 @@ public class PaymentInstrumentRequest {
     public void setPaymentMethodCode(String paymentMethodCode) { this.paymentMethodCode = paymentMethodCode; }
     public String getProviderToken() { return providerToken; }
     public void setProviderToken(String providerToken) { this.providerToken = providerToken; }
+    public String getProviderTokenType() { return providerTokenType; }
+    public void setProviderTokenType(String providerTokenType) { this.providerTokenType = providerTokenType; }
     public String getDisplayLabel() { return displayLabel; }
     public void setDisplayLabel(String displayLabel) { this.displayLabel = displayLabel; }
     public String getBrand() { return brand; }

@@ -1010,10 +1010,13 @@ public class PaymentService {
         if ("PAYPAL".equals(provider)) {
             PaymentMethodProviderConfigurationResolver.ResolvedPayPalConfig config = resolvePayPalConfig(method);
             response.setProviderBrandName(config.brandName());
+            response.setProviderClientId(config.clientId());
+            response.setBrowserTokenizationMode(config.isAvailable() ? "PAYPAL_JS_SDK" : null);
             response.setProviderConfigurationAvailable(config.isAvailable());
         } else if ("FABRICK".equals(provider)) {
             PaymentMethodProviderConfigurationResolver.ResolvedFabrickConfig config = resolveFabrickConfig(method);
             response.setProviderLightboxScriptUrl(config.lightboxScriptUrl());
+            response.setBrowserTokenizationMode(trimToNull(config.lightboxScriptUrl()) != null ? "FABRICK_LIGHTBOX" : "MANUAL_TOKEN");
             response.setProviderConfigurationAvailable(config.isAvailable());
         }
         return response;

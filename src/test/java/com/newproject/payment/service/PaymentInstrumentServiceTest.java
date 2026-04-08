@@ -3,20 +3,20 @@ package com.newproject.payment.service;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.newproject.payment.domain.PaymentInstrument;
 import com.newproject.payment.domain.PaymentMethod;
 import com.newproject.payment.dto.PaymentInstrumentRequest;
-import com.newproject.payment.dto.PaymentInstrumentResponse;
 import com.newproject.payment.repository.PaymentInstrumentRepository;
 import com.newproject.payment.repository.PaymentMethodRepository;
 import com.newproject.payment.security.RequestActor;
-import java.time.OffsetDateTime;
 import java.util.Optional;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -33,63 +33,63 @@ class PaymentInstrumentServiceTest {
     private PaymentMethodProviderConfigurationResolver providerConfigurationResolver;
     @Mock
     private RequestActor requestActor;
+    @Mock
+    private PayPalClient payPalClient;
 
+    @InjectMocks
     private PaymentInstrumentService paymentInstrumentService;
 
-    @BeforeEach
-    void setUp() {
-        paymentInstrumentService = new PaymentInstrumentService(
-            paymentInstrumentRepository,
-            paymentMethodRepository,
-            paymentCredentialCryptoService,
-            providerConfigurationResolver,
-            requestActor
-        );
-    }
-
     @Test
-    void createStoresOnlyEncryptedProviderToken() {
+    void createExchangesPayPalSetupTokenBeforePersisting() {
         PaymentMethod method = new PaymentMethod();
         method.setCode("paypal");
         method.setProvider("PAYPAL");
         method.setPaymentFlow("REDIRECT");
+        method.setDisplayName("PayPal");
         method.setActive(true);
+
+        PaymentInstrumentRequest request = new PaymentInstrumentRequest();
+        request.setPaymentMethodCode("paypal");
+        request.setProviderToken("vault-setup-token");
+        request.setProviderTokenType("PAYPAL_SETUP_TOKEN");
+        request.setDefaultInstrument(true);
+        request.setActive(true);
 
         when(requestActor.resolveScopedCustomerId(42L)).thenReturn(42L);
         when(paymentMethodRepository.findByCode("paypal")).thenReturn(Optional.of(method));
         when(providerConfigurationResolver.resolvePayPal(method)).thenReturn(
-            new PaymentMethodProviderConfigurationResolver.ResolvedPayPalConfig("production", "client", "secret", "https://api-m.paypal.com", "TSA", "webhook", "stored")
+            new PaymentMethodProviderConfigurationResolver.ResolvedPayPalConfig(
+                "production",
+                "client-id",
+                "client-secret",
+                "https://api-m.paypal.com",
+                "TSA Store",
+                null,
+                "stored"
+            )
         );
-        when(paymentCredentialCryptoService.encrypt("tok_live_reference")).thenReturn("enc:v1:token");
+        when(payPalClient.createPaymentTokenFromSetupToken(any(), any())).thenReturn(
+            new PayPalClient.PayPalPaymentTokenResult("vault-payment-token", "pp-customer-1", "shopper@example.com", "payer-1")
+        );
+        when(paymentCredentialCryptoService.encrypt("vault-payment-token")).thenReturn("encrypted-token");
         when(paymentInstrumentRepository.findFirstByCustomerIdAndProviderTokenFingerprint(any(), any())).thenReturn(Optional.empty());
-        when(paymentInstrumentRepository.save(any(PaymentInstrument.class))).thenAnswer(invocation -> {
+        when(paymentInstrumentRepository.save(any())).thenAnswer(invocation -> {
             PaymentInstrument instrument = invocation.getArgument(0);
-            instrument.setId(99L);
-            if (instrument.getCreatedAt() == null) {
-                instrument.setCreatedAt(OffsetDateTime.now());
-            }
-            if (instrument.getUpdatedAt() == null) {
-                instrument.setUpdatedAt(OffsetDateTime.now());
-            }
+            instrument.setId(77L);
             return instrument;
         });
 
-        PaymentInstrumentRequest request = new PaymentInstrumentRequest();
-        request.setPaymentMethodCode("paypal");
-        request.setProviderToken("tok_live_reference");
-        request.setDisplayLabel("PayPal vault");
-        request.setBrand("PayPal");
-        request.setLast4("4242");
-        request.setDefaultInstrument(true);
-        request.setActive(true);
+        var response = paymentInstrumentService.create(42L, request);
 
-        PaymentInstrumentResponse response = paymentInstrumentService.create(42L, request);
-
-        assertEquals(99L, response.getId());
-        assertEquals("paypal", response.getPaymentMethodCode());
-        assertEquals("PAYPAL", response.getProvider());
-        assertEquals("4242", response.getLast4());
+        ArgumentCaptor<PaymentInstrument> captor = ArgumentCaptor.forClass(PaymentInstrument.class);
+        verify(paymentInstrumentRepository).save(captor.capture());
+        PaymentInstrument saved = captor.getValue();
+        assertEquals("paypal", saved.getPaymentMethodCode());
+        assertEquals("PAYPAL", saved.getProvider());
+        assertEquals("pp-customer-1", saved.getGatewayCustomerReference());
+        assertEquals("PayPal - shopper@example.com", saved.getDisplayLabel());
+        assertEquals("PayPal", saved.getBrand());
+        assertEquals(77L, response.getId());
         assertTrue(Boolean.TRUE.equals(response.getTokenStored()));
-        assertTrue(Boolean.TRUE.equals(response.getDefaultInstrument()));
     }
 }

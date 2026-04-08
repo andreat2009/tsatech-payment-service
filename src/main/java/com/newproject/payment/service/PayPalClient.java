@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.net.URI;
+import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -23,6 +24,8 @@ import org.springframework.stereotype.Component;
 
 @Component
 public class PayPalClient {
+    private static final String PAYPAL_SDK_URL = "https://www.paypal.com/sdk/js";
+
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient;
 
@@ -37,6 +40,125 @@ public class PayPalClient {
 
     public boolean isWebhookVerificationAvailable(PaymentMethodProviderConfigurationResolver.ResolvedPayPalConfig config) {
         return config != null && config.isWebhookVerificationAvailable();
+    }
+
+    public String buildJavascriptSdkUrl(PaymentMethodProviderConfigurationResolver.ResolvedPayPalConfig config) {
+        if (!isAvailable(config)) {
+            throw new BadRequestException("PayPal credentials are not configured");
+        }
+        return PAYPAL_SDK_URL
+            + "?client-id=" + urlEncode(config.clientId())
+            + "&components=buttons"
+            + "&vault=true"
+            + "&intent=tokenize";
+    }
+
+    public String obtainUserIdToken(PaymentMethodProviderConfigurationResolver.ResolvedPayPalConfig config) {
+        PayPalOAuthTokenResponse tokens = obtainOAuthTokens(config, true);
+        if (!notBlank(tokens.idToken())) {
+            throw new BadRequestException("PayPal did not return a user id token for browser vaulting");
+        }
+        return tokens.idToken();
+    }
+
+    public PayPalSetupTokenResult createVaultSetupToken(PaymentMethodProviderConfigurationResolver.ResolvedPayPalConfig config) {
+        if (!isAvailable(config)) {
+            throw new BadRequestException("PayPal credentials are not configured");
+        }
+        try {
+            String accessToken = obtainAccessToken(config);
+            Map<String, Object> body = Map.of(
+                "payment_source", Map.of(
+                    "paypal", Map.of()
+                )
+            );
+
+            HttpRequest request = HttpRequest.newBuilder(URI.create(trimTrailingSlash(config.baseUrl()) + "/v3/vault/setup-tokens"))
+                .timeout(Duration.ofSeconds(20))
+                .header("Authorization", "Bearer " + accessToken)
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)))
+                .build();
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            ensureSuccess(response, "PayPal create setup token");
+            JsonNode root = objectMapper.readTree(response.body());
+            String setupToken = text(root.path("id"));
+            if (!notBlank(setupToken)) {
+                throw new BadRequestException("PayPal did not return a setup token");
+            }
+            return new PayPalSetupTokenResult(
+                setupToken,
+                firstNonBlank(
+                    text(root.path("customer").path("id")),
+                    text(root.path("payment_source").path("paypal").path("customer").path("id")),
+                    text(root.path("payment_source").path("paypal").path("account_id"))
+                ),
+                text(root.path("status"))
+            );
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new BadRequestException("Unable to initialize PayPal browser vaulting: " + ex.getMessage());
+        } catch (IOException ex) {
+            throw new BadRequestException("Unable to initialize PayPal browser vaulting: " + ex.getMessage());
+        }
+    }
+
+    public PayPalPaymentTokenResult createPaymentTokenFromSetupToken(
+        PaymentMethodProviderConfigurationResolver.ResolvedPayPalConfig config,
+        String setupToken
+    ) {
+        if (!isAvailable(config)) {
+            throw new BadRequestException("PayPal credentials are not configured");
+        }
+        if (!notBlank(setupToken)) {
+            throw new BadRequestException("PayPal setup token is missing");
+        }
+        try {
+            String accessToken = obtainAccessToken(config);
+            Map<String, Object> body = Map.of(
+                "payment_source", Map.of(
+                    "token", Map.of(
+                        "id", setupToken,
+                        "type", "SETUP_TOKEN"
+                    )
+                )
+            );
+
+            HttpRequest request = HttpRequest.newBuilder(URI.create(trimTrailingSlash(config.baseUrl()) + "/v3/vault/payment-tokens"))
+                .timeout(Duration.ofSeconds(20))
+                .header("Authorization", "Bearer " + accessToken)
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)))
+                .build();
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            ensureSuccess(response, "PayPal create payment token");
+            JsonNode root = objectMapper.readTree(response.body());
+            String paymentTokenId = text(root.path("id"));
+            if (!notBlank(paymentTokenId)) {
+                throw new BadRequestException("PayPal did not return a payment token");
+            }
+            return new PayPalPaymentTokenResult(
+                paymentTokenId,
+                firstNonBlank(
+                    text(root.path("customer").path("id")),
+                    text(root.path("payment_source").path("paypal").path("customer").path("id")),
+                    text(root.path("payment_source").path("paypal").path("account_id"))
+                ),
+                firstNonBlank(
+                    text(root.path("payment_source").path("paypal").path("email_address")),
+                    text(root.path("customer").path("email_address"))
+                ),
+                firstNonBlank(
+                    text(root.path("payment_source").path("paypal").path("account_id")),
+                    text(root.path("payment_source").path("paypal").path("payer_id"))
+                )
+            );
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new BadRequestException("Unable to finalize PayPal payment token: " + ex.getMessage());
+        } catch (IOException ex) {
+            throw new BadRequestException("Unable to finalize PayPal payment token: " + ex.getMessage());
+        }
     }
 
     public PayPalCreateResult createOrder(PaymentMethodProviderConfigurationResolver.ResolvedPayPalConfig config, Payment payment, PaymentRequest request) {
@@ -273,23 +395,44 @@ public class PayPalClient {
         }
     }
 
-    private String obtainAccessToken(PaymentMethodProviderConfigurationResolver.ResolvedPayPalConfig config) throws IOException, InterruptedException {
-        String credentials = config.clientId() + ":" + config.clientSecret();
-        String basic = Base64.getEncoder().encodeToString(credentials.getBytes(StandardCharsets.UTF_8));
-        HttpRequest tokenRequest = HttpRequest.newBuilder(URI.create(trimTrailingSlash(config.baseUrl()) + "/v1/oauth2/token"))
-            .timeout(Duration.ofSeconds(15))
-            .header("Authorization", "Basic " + basic)
-            .header("Content-Type", "application/x-www-form-urlencoded")
-            .POST(HttpRequest.BodyPublishers.ofString("grant_type=client_credentials"))
-            .build();
-        HttpResponse<String> tokenResponse = httpClient.send(tokenRequest, HttpResponse.BodyHandlers.ofString());
-        ensureSuccess(tokenResponse, "PayPal access token");
-        JsonNode tokenRoot = objectMapper.readTree(tokenResponse.body());
-        String accessToken = tokenRoot.path("access_token").asText(null);
-        if (accessToken == null || accessToken.isBlank()) {
-            throw new BadRequestException("PayPal did not return an access token");
+    private String obtainAccessToken(PaymentMethodProviderConfigurationResolver.ResolvedPayPalConfig config) {
+        return obtainOAuthTokens(config, false).accessToken();
+    }
+
+    private PayPalOAuthTokenResponse obtainOAuthTokens(
+        PaymentMethodProviderConfigurationResolver.ResolvedPayPalConfig config,
+        boolean includeUserIdToken
+    ) {
+        if (!isAvailable(config)) {
+            throw new BadRequestException("PayPal credentials are not configured");
         }
-        return accessToken;
+        try {
+            String credentials = config.clientId() + ":" + config.clientSecret();
+            String basic = Base64.getEncoder().encodeToString(credentials.getBytes(StandardCharsets.UTF_8));
+            StringBuilder body = new StringBuilder("grant_type=client_credentials");
+            if (includeUserIdToken) {
+                body.append("&response_type=id_token");
+            }
+            HttpRequest tokenRequest = HttpRequest.newBuilder(URI.create(trimTrailingSlash(config.baseUrl()) + "/v1/oauth2/token"))
+                .timeout(Duration.ofSeconds(15))
+                .header("Authorization", "Basic " + basic)
+                .header("Content-Type", "application/x-www-form-urlencoded")
+                .POST(HttpRequest.BodyPublishers.ofString(body.toString()))
+                .build();
+            HttpResponse<String> tokenResponse = httpClient.send(tokenRequest, HttpResponse.BodyHandlers.ofString());
+            ensureSuccess(tokenResponse, "PayPal access token");
+            JsonNode tokenRoot = objectMapper.readTree(tokenResponse.body());
+            String accessToken = tokenRoot.path("access_token").asText(null);
+            if (accessToken == null || accessToken.isBlank()) {
+                throw new BadRequestException("PayPal did not return an access token");
+            }
+            return new PayPalOAuthTokenResponse(accessToken, text(tokenRoot.path("id_token")));
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new BadRequestException("Unable to reach PayPal: " + ex.getMessage());
+        } catch (IOException ex) {
+            throw new BadRequestException("Unable to reach PayPal: " + ex.getMessage());
+        }
     }
 
     private BigDecimal parseAmount(JsonNode node) {
@@ -326,6 +469,30 @@ public class PayPalClient {
         return result;
     }
 
+    private String text(JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return null;
+        }
+        String value = node.asText(null);
+        return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    private String firstNonBlank(String... values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value.trim();
+            }
+        }
+        return null;
+    }
+
+    private String urlEncode(String value) {
+        return URLEncoder.encode(value == null ? "" : value, StandardCharsets.UTF_8);
+    }
+
     private boolean notBlank(String value) {
         return value != null && !value.isBlank();
     }
@@ -334,4 +501,7 @@ public class PayPalClient {
     public record PayPalCaptureResult(String orderId, String captureId, String status) {}
     public record PayPalRefundResult(String refundId, String status, BigDecimal refundedAmount) {}
     public record PayPalOrderSnapshot(String orderId, String orderStatus, String captureId, String captureStatus, BigDecimal refundedAmount) {}
+    public record PayPalSetupTokenResult(String setupToken, String providerCustomerId, String status) {}
+    public record PayPalPaymentTokenResult(String paymentTokenId, String providerCustomerId, String customerEmail, String payerId) {}
+    private record PayPalOAuthTokenResponse(String accessToken, String idToken) {}
 }

@@ -2,6 +2,8 @@ package com.newproject.payment.controller;
 
 import com.newproject.payment.dto.AdminPaymentMethodResponse;
 import com.newproject.payment.dto.FabrickCompletionRequest;
+import com.newproject.payment.dto.PayPalBrowserVaultSessionResponse;
+import com.newproject.payment.dto.PayPalSetupTokenResponse;
 import com.newproject.payment.dto.PaymentInstrumentRequest;
 import com.newproject.payment.dto.PaymentInstrumentResponse;
 import com.newproject.payment.dto.PaymentMethodRequest;
@@ -11,6 +13,7 @@ import com.newproject.payment.dto.PaymentRequest;
 import com.newproject.payment.dto.PaymentResponse;
 import com.newproject.payment.service.PaymentInstrumentService;
 import com.newproject.payment.service.PaymentService;
+import com.newproject.payment.service.PaymentVaultService;
 import jakarta.validation.Valid;
 import java.util.List;
 import java.util.Map;
@@ -22,10 +25,16 @@ import org.springframework.web.bind.annotation.*;
 public class PaymentController {
     private final PaymentService paymentService;
     private final PaymentInstrumentService paymentInstrumentService;
+    private final PaymentVaultService paymentVaultService;
 
-    public PaymentController(PaymentService paymentService, PaymentInstrumentService paymentInstrumentService) {
+    public PaymentController(
+        PaymentService paymentService,
+        PaymentInstrumentService paymentInstrumentService,
+        PaymentVaultService paymentVaultService
+    ) {
         this.paymentService = paymentService;
         this.paymentInstrumentService = paymentInstrumentService;
+        this.paymentVaultService = paymentVaultService;
     }
 
     @GetMapping("/methods")
@@ -57,6 +66,22 @@ public class PaymentController {
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void deletePaymentInstrument(@PathVariable Long customerId, @PathVariable Long instrumentId) {
         paymentInstrumentService.delete(customerId, instrumentId);
+    }
+
+    @PostMapping("/customers/{customerId}/vault/paypal/{paymentMethodCode}/browser-session")
+    public PayPalBrowserVaultSessionResponse createPayPalBrowserVaultSession(
+        @PathVariable Long customerId,
+        @PathVariable String paymentMethodCode
+    ) {
+        return paymentVaultService.createPayPalBrowserVaultSession(customerId, paymentMethodCode);
+    }
+
+    @PostMapping("/customers/{customerId}/vault/paypal/{paymentMethodCode}/setup-token")
+    public PayPalSetupTokenResponse createPayPalSetupToken(
+        @PathVariable Long customerId,
+        @PathVariable String paymentMethodCode
+    ) {
+        return paymentVaultService.createPayPalSetupToken(customerId, paymentMethodCode);
     }
 
     @GetMapping("/admin/methods")
