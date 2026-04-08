@@ -1004,6 +1004,18 @@ public class PaymentService {
         response.setDescription(method.getDescription());
         response.setActive(method.getActive());
         response.setSortOrder(method.getSortOrder());
+
+        String provider = method.getProvider() == null ? "" : method.getProvider().toUpperCase(Locale.ROOT);
+        response.setProviderConfigurationAvailable(true);
+        if ("PAYPAL".equals(provider)) {
+            PaymentMethodProviderConfigurationResolver.ResolvedPayPalConfig config = resolvePayPalConfig(method);
+            response.setProviderBrandName(config.brandName());
+            response.setProviderConfigurationAvailable(config.isAvailable());
+        } else if ("FABRICK".equals(provider)) {
+            PaymentMethodProviderConfigurationResolver.ResolvedFabrickConfig config = resolveFabrickConfig(method);
+            response.setProviderLightboxScriptUrl(config.lightboxScriptUrl());
+            response.setProviderConfigurationAvailable(config.isAvailable());
+        }
         return response;
     }
 

@@ -2,11 +2,14 @@ package com.newproject.payment.controller;
 
 import com.newproject.payment.dto.AdminPaymentMethodResponse;
 import com.newproject.payment.dto.FabrickCompletionRequest;
+import com.newproject.payment.dto.PaymentInstrumentRequest;
+import com.newproject.payment.dto.PaymentInstrumentResponse;
 import com.newproject.payment.dto.PaymentMethodRequest;
 import com.newproject.payment.dto.PaymentMethodResponse;
 import com.newproject.payment.dto.PaymentRefundRequest;
 import com.newproject.payment.dto.PaymentRequest;
 import com.newproject.payment.dto.PaymentResponse;
+import com.newproject.payment.service.PaymentInstrumentService;
 import com.newproject.payment.service.PaymentService;
 import jakarta.validation.Valid;
 import java.util.List;
@@ -18,14 +21,42 @@ import org.springframework.web.bind.annotation.*;
 @RequestMapping("/api/payments")
 public class PaymentController {
     private final PaymentService paymentService;
+    private final PaymentInstrumentService paymentInstrumentService;
 
-    public PaymentController(PaymentService paymentService) {
+    public PaymentController(PaymentService paymentService, PaymentInstrumentService paymentInstrumentService) {
         this.paymentService = paymentService;
+        this.paymentInstrumentService = paymentInstrumentService;
     }
 
     @GetMapping("/methods")
     public List<PaymentMethodResponse> methods() {
         return paymentService.listMethods();
+    }
+
+    @GetMapping("/customers/{customerId}/instruments")
+    public List<PaymentInstrumentResponse> listPaymentInstruments(@PathVariable Long customerId) {
+        return paymentInstrumentService.listForCustomer(customerId);
+    }
+
+    @PostMapping("/customers/{customerId}/instruments")
+    @ResponseStatus(HttpStatus.CREATED)
+    public PaymentInstrumentResponse createPaymentInstrument(@PathVariable Long customerId, @RequestBody PaymentInstrumentRequest request) {
+        return paymentInstrumentService.create(customerId, request);
+    }
+
+    @PutMapping("/customers/{customerId}/instruments/{instrumentId}")
+    public PaymentInstrumentResponse updatePaymentInstrument(
+        @PathVariable Long customerId,
+        @PathVariable Long instrumentId,
+        @RequestBody PaymentInstrumentRequest request
+    ) {
+        return paymentInstrumentService.update(customerId, instrumentId, request);
+    }
+
+    @DeleteMapping("/customers/{customerId}/instruments/{instrumentId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deletePaymentInstrument(@PathVariable Long customerId, @PathVariable Long instrumentId) {
+        paymentInstrumentService.delete(customerId, instrumentId);
     }
 
     @GetMapping("/admin/methods")

@@ -9,6 +9,9 @@ public class PaymentMethodResponse {
     private String description;
     private Boolean active;
     private Integer sortOrder;
+    private String providerBrandName;
+    private String providerLightboxScriptUrl;
+    private Boolean providerConfigurationAvailable;
 
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
@@ -26,4 +29,10 @@ public class PaymentMethodResponse {
     public void setActive(Boolean active) { this.active = active; }
     public Integer getSortOrder() { return sortOrder; }
     public void setSortOrder(Integer sortOrder) { this.sortOrder = sortOrder; }
+    public String getProviderBrandName() { return providerBrandName; }
+    public void setProviderBrandName(String providerBrandName) { this.providerBrandName = providerBrandName; }
+    public String getProviderLightboxScriptUrl() { return providerLightboxScriptUrl; }
+    public void setProviderLightboxScriptUrl(String providerLightboxScriptUrl) { this.providerLightboxScriptUrl = providerLightboxScriptUrl; }
+    public Boolean getProviderConfigurationAvailable() { return providerConfigurationAvailable; }
+    public void setProviderConfigurationAvailable(Boolean providerConfigurationAvailable) { this.providerConfigurationAvailable = providerConfigurationAvailable; }
 }
