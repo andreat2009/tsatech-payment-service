@@ -52,6 +52,10 @@ payment:
   order-events:
     topic: ${PAYMENT_ORDER_EVENTS_TOPIC:order.events}
 
+ecommerce:
+  services:
+    order-base-url: ${ORDER_BASE_URL:http://order-service.${APP_NAMESPACE:ecommerce}.svc.cluster.local:8443}
+
 management:
   endpoints:
     web:

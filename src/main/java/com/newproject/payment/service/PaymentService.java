@@ -44,6 +44,7 @@ public class PaymentService {
     private final PaymentMethodProviderConfigurationResolver providerConfigurationResolver;
     private final PaymentCredentialCryptoService paymentCredentialCryptoService;
     private final ObjectMapper objectMapper;
+    private final OrderClient orderClient;
 
     public PaymentService(
         PaymentRepository paymentRepository,
@@ -54,7 +55,8 @@ public class PaymentService {
         FabrickClient fabrickClient,
         PaymentMethodProviderConfigurationResolver providerConfigurationResolver,
         PaymentCredentialCryptoService paymentCredentialCryptoService,
-        ObjectMapper objectMapper
+        ObjectMapper objectMapper,
+        OrderClient orderClient
     ) {
         this.paymentRepository = paymentRepository;
         this.paymentMethodRepository = paymentMethodRepository;
@@ -65,6 +67,7 @@ public class PaymentService {
         this.providerConfigurationResolver = providerConfigurationResolver;
         this.paymentCredentialCryptoService = paymentCredentialCryptoService;
         this.objectMapper = objectMapper;
+        this.orderClient = orderClient;
     }
 
     @Transactional(readOnly = true)
@@ -111,6 +114,8 @@ public class PaymentService {
         String methodCode = normalizeMethodCode(request.getMethodCode(), request.getProvider());
         PaymentMethod method = resolveMethod(methodCode);
 
+        assertAmountMatchesOrder(request);
+
         Payment payment = paymentRepository.findFirstByOrderIdOrderByIdAsc(request.getOrderId()).orElseGet(Payment::new);
         boolean created = payment.getId() == null;
         OffsetDateTime now = OffsetDateTime.now();
@@ -155,6 +160,30 @@ public class PaymentService {
         )), saved.getAmount(), firstNonBlank(saved.getProviderPaymentId(), saved.getProviderOrderId()));
         publishPaymentEvent(created ? "PAYMENT_CREATED" : "PAYMENT_UPDATED", saved);
         return toResponse(saved);
+    }
+
+    /**
+     * Guardia anti-manipolazione: l'importo del pagamento DEVE coincidere con il total autoritativo
+     * dell'ordine (calcolato da order-service). Impedisce di pagare meno chiamando il gateway diretto
+     * con un amount arbitrario.
+     */
+    private void assertAmountMatchesOrder(PaymentRequest request) {
+        if (request.getOrderId() == null || request.getAmount() == null) {
+            return;
+        }
+        OrderClient.OrderSummary summary = orderClient.getSummary(request.getOrderId());
+        BigDecimal orderTotal = summary != null ? summary.getTotal() : null;
+        if (orderTotal == null) {
+            throw new BadRequestException("Order total unavailable for order " + request.getOrderId());
+        }
+        if (orderTotal.compareTo(request.getAmount()) != 0) {
+            throw new BadRequestException("Payment amount " + request.getAmount()
+                + " does not match authoritative order total " + orderTotal);
+        }
+        if (summary.getCurrency() != null && request.getCurrency() != null
+            && !summary.getCurrency().equalsIgnoreCase(request.getCurrency().trim())) {
+            throw new BadRequestException("Payment currency does not match order currency");
+        }
     }
 
     @Transactional
