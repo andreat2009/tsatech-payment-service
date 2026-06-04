@@ -44,6 +44,8 @@ class PaymentServiceAdminConsoleTest {
     private PaymentMethodProviderConfigurationResolver providerConfigurationResolver;
     @Mock
     private PaymentCredentialCryptoService paymentCredentialCryptoService;
+    @Mock
+    private OrderClient orderClient;
 
     private PaymentService paymentService;
 
@@ -58,7 +60,8 @@ class PaymentServiceAdminConsoleTest {
             fabrickClient,
             providerConfigurationResolver,
             paymentCredentialCryptoService,
-            new ObjectMapper()
+            new ObjectMapper(),
+            orderClient
         );
     }
 

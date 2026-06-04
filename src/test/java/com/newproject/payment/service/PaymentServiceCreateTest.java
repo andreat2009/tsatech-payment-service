@@ -47,6 +47,8 @@ class PaymentServiceCreateTest {
     private PaymentMethodProviderConfigurationResolver providerConfigurationResolver;
     @Mock
     private PaymentCredentialCryptoService paymentCredentialCryptoService;
+    @Mock
+    private OrderClient orderClient;
 
     private PaymentService paymentService;
 
@@ -61,7 +63,8 @@ class PaymentServiceCreateTest {
             fabrickClient,
             providerConfigurationResolver,
             paymentCredentialCryptoService,
-            new ObjectMapper()
+            new ObjectMapper(),
+            orderClient
         );
 
         when(paymentTransactionRepository.save(any(PaymentTransaction.class))).thenAnswer(invocation -> invocation.getArgument(0));
@@ -73,6 +76,7 @@ class PaymentServiceCreateTest {
         PaymentMethod method = offlineMethod();
         when(paymentMethodRepository.findByCode("bank_transfer")).thenReturn(Optional.of(method));
         when(paymentRepository.findFirstByOrderIdOrderByIdAsc(42L)).thenReturn(Optional.empty());
+        when(orderClient.getSummary(42L)).thenReturn(orderSummary(42L, new BigDecimal("99.90")));
         List<String> persistedStatuses = new ArrayList<>();
         when(paymentRepository.save(any(Payment.class))).thenAnswer(invocation -> {
             Payment payment = invocation.getArgument(0);
@@ -123,6 +127,7 @@ class PaymentServiceCreateTest {
 
         when(paymentMethodRepository.findByCode("paypal")).thenReturn(Optional.of(method));
         when(paymentRepository.findFirstByOrderIdOrderByIdAsc(77L)).thenReturn(Optional.empty());
+        when(orderClient.getSummary(77L)).thenReturn(orderSummary(77L, new BigDecimal("19.90")));
         List<String> persistedStatuses = new ArrayList<>();
         when(paymentRepository.save(any(Payment.class))).thenAnswer(invocation -> {
             Payment payment = invocation.getArgument(0);
@@ -155,6 +160,14 @@ class PaymentServiceCreateTest {
         assertThat(response.getStatus()).isEqualTo("REDIRECT_REQUIRED");
         assertThat(response.getProviderOrderId()).isEqualTo("PP-ORDER-1");
         assertThat(response.getRedirectUrl()).isEqualTo("https://paypal.example/approve");
+    }
+
+    private OrderClient.OrderSummary orderSummary(Long id, BigDecimal total) {
+        OrderClient.OrderSummary summary = new OrderClient.OrderSummary();
+        summary.setId(id);
+        summary.setTotal(total);
+        summary.setCurrency("EUR");
+        return summary;
     }
 
     private PaymentMethod offlineMethod() {
