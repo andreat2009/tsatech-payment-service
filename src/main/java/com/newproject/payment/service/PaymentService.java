@@ -141,7 +141,11 @@ public class PaymentService {
         payment.setLastReconciledAt(null);
         payment.setLastWebhookAt(null);
         payment.setLastProviderSyncAt(null);
-        payment.setStatus(trimToNull(request.getStatus()) != null ? trimToNull(request.getStatus()) : "CREATED");
+        // SECURITY (C1): lo status iniziale e' SEMPRE deciso dal server, mai dal client.
+        // initiatePayment() lo sovrascrive per-provider (OFFLINE -> PENDING_OFFLINE,
+        // online -> REDIRECT_REQUIRED). Accettare request.getStatus() qui permetteva di
+        // creare un pagamento gia' CAPTURED e far passare l'ordine a PAID senza incasso.
+        payment.setStatus("CREATED");
         if (created) {
             payment.setCreatedAt(now);
         }
@@ -536,7 +540,10 @@ public class PaymentService {
         String provider = method.getProvider().toUpperCase(Locale.ROOT);
         payment.setProviderEnvironment(resolveEnvironment(method));
         if ("OFFLINE".equals(provider)) {
-            payment.setStatus(request.getStatus() != null ? request.getStatus() : "PENDING_OFFLINE");
+            // SECURITY (C1): i metodi OFFLINE (bank_transfer, cash_on_delivery) restano sempre
+            // PENDING_OFFLINE alla creazione. La promozione a CAPTURED/PAID e' una decisione
+            // amministrativa (POST /api/payments/admin/** o PUT, gia' ADMIN-only), mai del client.
+            payment.setStatus("PENDING_OFFLINE");
             return;
         }
         if ("PAYPAL".equals(provider)) {

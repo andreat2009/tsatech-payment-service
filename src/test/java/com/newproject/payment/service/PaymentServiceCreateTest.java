@@ -99,7 +99,11 @@ class PaymentServiceCreateTest {
 
         assertThat(persistedStatuses).isNotEmpty();
         assertThat(persistedStatuses.get(0)).isEqualTo("CREATED");
-        assertThat(response.getStatus()).isEqualTo("CREATED");
+        // SECURITY (C1): lo status iniziale e' "CREATED" (primo save), poi i metodi OFFLINE
+        // vengono forzati a "PENDING_OFFLINE" ignorando lo status passato dal client. La
+        // richiesta sopra passa "CREATED" di proposito: non deve piu' essere onorato.
+        assertThat(persistedStatuses).last().isEqualTo("PENDING_OFFLINE");
+        assertThat(response.getStatus()).isEqualTo("PENDING_OFFLINE");
         assertThat(response.getMethodCode()).isEqualTo("bank_transfer");
         verify(payPalClient, never()).createOrder(any(), any(), any());
     }
